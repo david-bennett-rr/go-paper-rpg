@@ -14,5 +14,7 @@ debug.log
 .idea/
 
 # OS
-.DS_Store
+.DS_Store   
 Thumbs.db
+
+.claude/
