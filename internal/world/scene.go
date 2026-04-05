@@ -1,0 +1,278 @@
+package world
+
+import (
+	"fmt"
+	"math"
+
+	"github.com/solarlune/tetra3d"
+
+	"github.com/davidbennett/go-paper-rpg/internal/data"
+	"github.com/davidbennett/go-paper-rpg/internal/overworld"
+)
+
+func BuildScene(mapDef *data.MapDef) (*tetra3d.Scene, *overworld.Player, error) {
+	data.NormalizeMap(mapDef)
+
+	scene := tetra3d.NewScene(mapDef.Name)
+	palette := newScenePalette()
+
+	scene.Root.AddChildren(buildGround(mapDef.Ground, palette))
+	scene.Root.AddChildren(buildLights())
+
+	for _, prop := range mapDef.Props {
+		instance, err := buildPrefab(prop.Prefab, palette)
+		if err != nil {
+			return nil, nil, fmt.Errorf("build prop %s: %w", prop.ID, err)
+		}
+		placeInstance(instance, prop.Position, prop.Yaw, clampScale(prop.Scale))
+		instance.SetName(prop.ID)
+		scene.Root.AddChildren(instance)
+	}
+
+	for _, wallModel := range buildWalls(mapDef.Walls, palette) {
+		scene.Root.AddChildren(wallModel)
+	}
+
+	for _, enemy := range mapDef.Enemies {
+		instance, err := buildPrefab(enemy.Prefab, palette)
+		if err != nil {
+			return nil, nil, fmt.Errorf("build enemy %s: %w", enemy.ID, err)
+		}
+		placeInstance(instance, enemy.Position, enemy.Yaw, v3(1, 1, 1))
+		instance.SetName(enemy.ID)
+		scene.Root.AddChildren(instance)
+	}
+
+	player := overworld.NewPlayer(BuildPlayerPrefab())
+	spawn := mapDef.PlayerSpawn
+	player.SetPlacement(
+		spawn.Position[0],
+		spawn.Position[1],
+		spawn.Position[2],
+		spawn.Yaw,
+	)
+	scene.Root.AddChildren(player.Root)
+
+	return scene, player, nil
+}
+
+func buildGround(ground data.GroundDef, palette scenePalette) tetra3d.INode {
+	root := tetra3d.NewNode("Ground")
+
+	sizeX := ground.Size[0]
+	sizeZ := ground.Size[1]
+	if sizeX <= 0 {
+		sizeX = 28
+	}
+	if sizeZ <= 0 {
+		sizeZ = 28
+	}
+
+	grass := newPrimitiveModel("Grass", tetra3d.NewPlaneMesh(2, 2), palette.grass, v3(0, 0, 0), v3(float32(sizeX), 1, float32(sizeZ)))
+	root.AddChildren(grass)
+
+	pathA := newPrimitiveModel("PathA", tetra3d.NewPlaneMesh(2, 2), palette.dirt, v3(-1.2, 0.01, 2.2), v3(2.6, 1, 6.5))
+	pathA.SetLocalRotation(tetra3d.NewMatrix4Rotate(0, 1, 0, 0.38))
+	root.AddChildren(pathA)
+
+	pathB := newPrimitiveModel("PathB", tetra3d.NewPlaneMesh(2, 2), palette.dirt, v3(2.4, 0.015, -2.8), v3(1.8, 1, 4.0))
+	pathB.SetLocalRotation(tetra3d.NewMatrix4Rotate(0, 1, 0, -0.32))
+	root.AddChildren(pathB)
+
+	return root
+}
+
+func buildLights() tetra3d.INode {
+	root := tetra3d.NewNode("Lights")
+
+	ambient := tetra3d.NewAmbientLight("Ambient", 1, 1, 1, 0.55)
+	sun := tetra3d.NewDirectionalLight("Sun", 1, 0.97, 0.92, 0.85)
+	sun.SetLocalRotation(
+		tetra3d.NewMatrix4Rotate(0, 1, 0, float32(-math.Pi/3)).
+			Rotated(1, 0, 0, -0.95),
+	)
+
+	root.AddChildren(ambient, sun)
+	return root
+}
+
+func placeInstance(instance tetra3d.INode, position [3]float64, yaw float64, scale tetra3d.Vector3) {
+	instance.SetLocalPositionVec(v3(
+		float32(position[0]),
+		float32(position[1]),
+		float32(position[2]),
+	))
+	instance.SetLocalRotation(yawRotation(yaw))
+	instance.SetLocalScaleVec(scale)
+}
+
+type wallProfileKey struct {
+	y      int
+	height int
+	yaw    int
+}
+
+type wallTileKey struct {
+	x       int
+	z       int
+	profile wallProfileKey
+}
+
+type wallTile struct {
+	key      wallTileKey
+	position [3]float64
+	height   float64
+	yaw      float64
+}
+
+func buildWalls(walls []data.WallDef, palette scenePalette) []tetra3d.INode {
+	tiles := collectWallTiles(walls)
+	if len(tiles) == 0 {
+		return nil
+	}
+
+	components := splitWallComponents(tiles)
+	cubeMesh := tetra3d.NewCubeMesh()
+	models := make([]tetra3d.INode, 0, len(components))
+
+	for i, component := range components {
+		merged := tetra3d.NewModel(
+			fmt.Sprintf("WallGroup_%d", i+1),
+			tetra3d.NewMesh(fmt.Sprintf("WallGroup_%d_Mesh", i+1)),
+		)
+		partModels := make([]*tetra3d.Model, 0, len(component))
+
+		for _, tile := range component {
+			part := newPrimitiveModel("WallTile", cubeMesh, palette.wall, tetra3d.Vector3{}, v3(0.5, float32(tile.height)/2, 0.5))
+			part.SetLocalPositionVec(v3(
+				float32(tile.position[0]),
+				float32(tile.position[1]),
+				float32(tile.position[2]),
+			))
+			part.SetLocalRotation(yawRotation(tile.yaw))
+			partModels = append(partModels, part)
+		}
+
+		merged.StaticMerge(partModels...)
+		models = append(models, merged)
+	}
+
+	return models
+}
+
+func expandWallTiles(wall data.WallDef) [][3]float64 {
+	countX := int(math.Max(1, math.Round(wall.Size[0])))
+	countZ := int(math.Max(1, math.Round(wall.Size[2])))
+	startX := wall.Position[0] - float64(countX-1)/2
+	startZ := wall.Position[2] - float64(countZ-1)/2
+
+	tiles := make([][3]float64, 0, countX*countZ)
+	for x := 0; x < countX; x++ {
+		for z := 0; z < countZ; z++ {
+			tiles = append(tiles, [3]float64{
+				startX + float64(x),
+				wall.Position[1],
+				startZ + float64(z),
+			})
+		}
+	}
+	return tiles
+}
+
+func collectWallTiles(walls []data.WallDef) []wallTile {
+	tiles := make([]wallTile, 0, len(walls))
+	seen := map[wallTileKey]struct{}{}
+
+	for _, wall := range walls {
+		profile := wallProfileKey{
+			y:      quantizeWallValue(wall.Position[1]),
+			height: quantizeWallValue(wall.Size[1]),
+			yaw:    quantizeWallValue(normalizeYaw(wall.Yaw)),
+		}
+
+		for _, position := range expandWallTiles(wall) {
+			key := wallTileKey{
+				x:       quantizeWallCoord(position[0]),
+				z:       quantizeWallCoord(position[2]),
+				profile: profile,
+			}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+
+			tiles = append(tiles, wallTile{
+				key: key,
+				position: [3]float64{
+					dequantizeWallCoord(key.x),
+					wall.Position[1],
+					dequantizeWallCoord(key.z),
+				},
+				height: wall.Size[1],
+				yaw:    wall.Yaw,
+			})
+		}
+	}
+
+	return tiles
+}
+
+func splitWallComponents(tiles []wallTile) [][]wallTile {
+	indexByKey := make(map[wallTileKey]int, len(tiles))
+	for i, tile := range tiles {
+		indexByKey[tile.key] = i
+	}
+
+	visited := make([]bool, len(tiles))
+	components := make([][]wallTile, 0, len(tiles))
+
+	for i := range tiles {
+		if visited[i] {
+			continue
+		}
+
+		queue := []int{i}
+		visited[i] = true
+		component := make([]wallTile, 0, 8)
+
+		for len(queue) > 0 {
+			current := queue[0]
+			queue = queue[1:]
+			component = append(component, tiles[current])
+
+			for _, neighbor := range wallNeighborKeys(tiles[current].key) {
+				next, exists := indexByKey[neighbor]
+				if !exists || visited[next] {
+					continue
+				}
+				visited[next] = true
+				queue = append(queue, next)
+			}
+		}
+
+		components = append(components, component)
+	}
+
+	return components
+}
+
+func wallNeighborKeys(key wallTileKey) []wallTileKey {
+	return []wallTileKey{
+		{x: key.x - 2, z: key.z, profile: key.profile},
+		{x: key.x + 2, z: key.z, profile: key.profile},
+		{x: key.x, z: key.z - 2, profile: key.profile},
+		{x: key.x, z: key.z + 2, profile: key.profile},
+	}
+}
+
+func quantizeWallCoord(v float64) int {
+	return int(math.Round(v * 2))
+}
+
+func dequantizeWallCoord(v int) float64 {
+	return float64(v) / 2
+}
+
+func quantizeWallValue(v float64) int {
+	return int(math.Round(v * 1000))
+}

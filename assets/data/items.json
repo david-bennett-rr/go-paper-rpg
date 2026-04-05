@@ -1,0 +1,42 @@
+{
+  "mushroom": {
+    "name": "Mushroom",
+    "description": "Restores 5 HP.",
+    "type": "consumable",
+    "effect": {"type": "heal_hp", "amount": 5},
+    "buy_price": 5,
+    "sell_price": 2
+  },
+  "super_mushroom": {
+    "name": "Super Mushroom",
+    "description": "Restores 10 HP.",
+    "type": "consumable",
+    "effect": {"type": "heal_hp", "amount": 10},
+    "buy_price": 15,
+    "sell_price": 7
+  },
+  "honey_syrup": {
+    "name": "Honey Syrup",
+    "description": "Restores 5 FP.",
+    "type": "consumable",
+    "effect": {"type": "heal_fp", "amount": 5},
+    "buy_price": 5,
+    "sell_price": 2
+  },
+  "fire_flower": {
+    "name": "Fire Flower",
+    "description": "Deals 3 damage to all enemies.",
+    "type": "consumable",
+    "effect": {"type": "damage", "amount": 3},
+    "buy_price": 10,
+    "sell_price": 5
+  },
+  "pow_block": {
+    "name": "POW Block",
+    "description": "Deals 2 damage to all grounded enemies.",
+    "type": "consumable",
+    "effect": {"type": "damage", "amount": 2},
+    "buy_price": 8,
+    "sell_price": 4
+  }
+}

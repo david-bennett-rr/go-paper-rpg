@@ -1,0 +1,7 @@
+{
+  "test_room": {
+    "name": "Forest Clearing",
+    "map_file": "data/maps/test_room.json",
+    "bgm": ""
+  }
+}

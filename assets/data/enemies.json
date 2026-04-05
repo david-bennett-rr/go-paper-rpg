@@ -1,0 +1,66 @@
+{
+  "goomba": {
+    "name": "Goomba",
+    "hp": 2,
+    "attack": 1,
+    "defense": 0,
+    "sprite": "sprites/goomba.png",
+    "moves": [
+      {"name": "Headbonk", "power": 1, "type": "jump", "action_command": "timed_press"}
+    ],
+    "ai_patterns": [
+      {"move": "Headbonk", "weight": 100, "condition": "always"}
+    ],
+    "star_points": 1,
+    "coins_drop": [1, 3]
+  },
+  "koopa": {
+    "name": "Koopa Troopa",
+    "hp": 4,
+    "attack": 2,
+    "defense": 1,
+    "sprite": "sprites/koopa.png",
+    "moves": [
+      {"name": "Shell Toss", "power": 2, "type": "hammer", "action_command": "timed_press"},
+      {"name": "Shell Shield", "power": 0, "type": "special", "action_command": ""}
+    ],
+    "ai_patterns": [
+      {"move": "Shell Toss", "weight": 70, "condition": "always"},
+      {"move": "Shell Shield", "weight": 30, "condition": "hp_below_50"}
+    ],
+    "star_points": 2,
+    "coins_drop": [1, 4]
+  },
+  "bob_omb": {
+    "name": "Bob-omb",
+    "hp": 3,
+    "attack": 2,
+    "defense": 0,
+    "sprite": "sprites/bob_omb.png",
+    "moves": [
+      {"name": "Tackle", "power": 1, "type": "hammer", "action_command": "timed_press"},
+      {"name": "Explosion", "power": 5, "type": "special", "action_command": ""}
+    ],
+    "ai_patterns": [
+      {"move": "Tackle", "weight": 80, "condition": "always"},
+      {"move": "Explosion", "weight": 100, "condition": "hp_below_30"}
+    ],
+    "star_points": 2,
+    "coins_drop": [2, 5]
+  },
+  "wolf": {
+    "name": "Wolf",
+    "hp": 5,
+    "attack": 2,
+    "defense": 1,
+    "sprite": "sprites/wolf.png",
+    "moves": [
+      {"name": "Bite", "power": 2, "type": "hammer", "action_command": "timed_press"}
+    ],
+    "ai_patterns": [
+      {"move": "Bite", "weight": 100, "condition": "always"}
+    ],
+    "star_points": 3,
+    "coins_drop": [2, 4]
+  }
+}
