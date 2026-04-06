@@ -1,0 +1,48 @@
+//kage:unit pixels
+
+package main
+
+// Uniforms passed from Go code.
+var ScreenSize vec2
+var VignetteStrength float
+var BloomThreshold float
+var BloomIntensity float
+
+func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
+	clr := imageSrc0UnsafeAt(srcPos)
+
+	// --- Subtle bloom on bright pixels only ---
+	bloom := vec3(0)
+	samples := 0.0
+	for dx := -2.0; dx <= 2.0; dx += 1.0 {
+		for dy := -2.0; dy <= 2.0; dy += 1.0 {
+			offset := vec2(dx, dy)
+			s := imageSrc0UnsafeAt(srcPos + offset)
+			luminance := dot(s.rgb, vec3(0.2126, 0.7152, 0.0722))
+			if luminance > BloomThreshold {
+				weight := 1.0 - length(offset)/3.5
+				if weight < 0 {
+					weight = 0
+				}
+				bloom += s.rgb * weight
+				samples += weight
+			}
+		}
+	}
+	if samples > 0 {
+		bloom /= samples
+		clr.rgb += bloom * BloomIntensity
+	}
+
+	// --- Vignette: darken edges ---
+	pos := dstPos.xy / ScreenSize
+	center := pos - 0.5
+	dist := length(center) * 1.4
+	vignette := 1.0 - dist*dist*VignetteStrength
+	if vignette < 0 {
+		vignette = 0
+	}
+	clr.rgb *= vignette
+
+	return clr
+}

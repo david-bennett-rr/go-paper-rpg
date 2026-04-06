@@ -9,9 +9,9 @@ import (
 )
 
 func main() {
-	ebiten.SetWindowSize(960, 540)
 	ebiten.SetWindowTitle("Paper RPG")
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
+	ebiten.MaximizeWindow()
 
 	game := app.NewGame()
 

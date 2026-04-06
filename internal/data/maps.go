@@ -20,7 +20,13 @@ type MapDef struct {
 }
 
 type GroundDef struct {
-	Size [2]float64 `json:"size"`
+	Size    [2]float64   `json:"size"`
+	Terrain []TerrainDef `json:"terrain,omitempty"`
+}
+
+type TerrainDef struct {
+	Position [2]float64 `json:"position"`
+	Type     string     `json:"type"`
 }
 
 type SpawnPointDef struct {

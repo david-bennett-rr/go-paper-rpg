@@ -10,9 +10,6 @@ import (
 )
 
 const (
-	InternalW = 480
-	InternalH = 270
-
 	// Three-quarter RPG camera with a slight perspective and diagonal yaw.
 	camDist        = 25.0
 	camAngleY      = math.Pi / 4.0
@@ -32,23 +29,31 @@ func ScreenToWorldMove(screenX, screenY float64) (worldX, worldZ float64) {
 
 // Renderer manages Tetra3D scene rendering and sprite billboarding.
 type Renderer struct {
-	Camera *tetra3d.Camera
-	Scene  *tetra3d.Scene
-	logged bool
+	Camera      *tetra3d.Camera
+	Scene       *tetra3d.Scene
+	PostProcess *PostProcess
+	logged      bool
 }
 
 func NewRenderer() *Renderer {
-	camera := tetra3d.NewCamera(InternalW, InternalH)
+	// Start with a reasonable default; Resize() will update to match the window.
+	camera := tetra3d.NewCamera(1920, 1080)
 	camera.SetPerspective(true)
 	camera.SetFieldOfView(camFieldOfView)
 	camera.SetFar(200)
 	camera.SetNear(0.1)
 
-	util.DebugLog("Camera created: %dx%d, perspective, fov=%.1f", InternalW, InternalH, camFieldOfView)
+	util.DebugLog("Camera created: perspective, fov=%.1f", camFieldOfView)
 
 	return &Renderer{
-		Camera: camera,
+		Camera:      camera,
+		PostProcess: NewPostProcess(),
 	}
+}
+
+// Resize updates the camera render resolution. Call from Layout().
+func (r *Renderer) Resize(w, h int) {
+	r.Camera.Resize(w, h)
 }
 
 // SetScene sets the active 3D scene and adds the camera to it.
@@ -103,7 +108,12 @@ func (r *Renderer) DrawSceneWithSprites(screen *ebiten.Image, sprites []SpriteIn
 		)
 	}
 
-	screen.DrawImage(colorTex, nil)
+	// Apply post-processing (bloom + vignette)
+	if r.PostProcess != nil {
+		r.PostProcess.Apply(screen, colorTex)
+	} else {
+		screen.DrawImage(colorTex, nil)
+	}
 
 	if !r.logged {
 		r.logged = true
@@ -125,4 +135,40 @@ type SpriteInstance struct {
 // SetCameraFollow moves the camera to center on a target position.
 func (r *Renderer) SetCameraFollow(targetX, targetY, targetZ float64) {
 	r.orientCamera(targetX, targetY, targetZ)
+}
+
+// RenderBattleScene renders a standalone scene with a front-facing camera.
+// The camera sits at eye level, looking straight at the origin.
+func (r *Renderer) RenderBattleScene(screen *ebiten.Image, scene *tetra3d.Scene) {
+	if scene == nil {
+		return
+	}
+
+	// Temporarily attach camera to the battle scene
+	prevScene := r.Scene
+	r.Scene = scene
+	scene.Root.AddChildren(r.Camera)
+
+	// Position camera to view the battle stage from the front
+	r.Camera.SetWorldPositionVec(tetra3d.NewVector3(0, 1.8, 8))
+	rot := tetra3d.NewMatrix4Rotate(0, 1, 0, 0).
+		Rotated(1, 0, 0, -0.12)
+	r.Camera.SetLocalRotation(rot)
+
+	r.Camera.Clear()
+	r.Camera.RenderScene(scene)
+
+	colorTex := r.Camera.ColorTexture()
+	if r.PostProcess != nil {
+		r.PostProcess.Apply(screen, colorTex)
+	} else {
+		screen.DrawImage(colorTex, nil)
+	}
+
+	// Restore
+	r.Camera.Unparent()
+	r.Scene = prevScene
+	if prevScene != nil {
+		prevScene.Root.AddChildren(r.Camera)
+	}
 }

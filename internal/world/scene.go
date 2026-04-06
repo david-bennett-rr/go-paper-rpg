@@ -10,7 +10,13 @@ import (
 	"github.com/davidbennett/go-paper-rpg/internal/overworld"
 )
 
-func BuildScene(mapDef *data.MapDef) (*tetra3d.Scene, *overworld.Player, error) {
+const (
+	sunYaw          = -3 * math.Pi / 4
+	sunPitch        = -0.95
+	groundTileDepth = 0.08
+)
+
+func BuildScene(mapDef *data.MapDef) (*tetra3d.Scene, *overworld.Player, []*overworld.Enemy, error) {
 	data.NormalizeMap(mapDef)
 
 	scene := tetra3d.NewScene(mapDef.Name)
@@ -22,7 +28,7 @@ func BuildScene(mapDef *data.MapDef) (*tetra3d.Scene, *overworld.Player, error) 
 	for _, prop := range mapDef.Props {
 		instance, err := buildPrefab(prop.Prefab, palette)
 		if err != nil {
-			return nil, nil, fmt.Errorf("build prop %s: %w", prop.ID, err)
+			return nil, nil, nil, fmt.Errorf("build prop %s: %w", prop.ID, err)
 		}
 		placeInstance(instance, prop.Position, prop.Yaw, clampScale(prop.Scale))
 		instance.SetName(prop.ID)
@@ -33,14 +39,28 @@ func BuildScene(mapDef *data.MapDef) (*tetra3d.Scene, *overworld.Player, error) 
 		scene.Root.AddChildren(wallModel)
 	}
 
-	for _, enemy := range mapDef.Enemies {
-		instance, err := buildPrefab(enemy.Prefab, palette)
+	enemies := make([]*overworld.Enemy, 0, len(mapDef.Enemies))
+	for _, enemyDef := range mapDef.Enemies {
+		instance, err := buildPrefab(enemyDef.Prefab, palette)
 		if err != nil {
-			return nil, nil, fmt.Errorf("build enemy %s: %w", enemy.ID, err)
+			return nil, nil, nil, fmt.Errorf("build enemy %s: %w", enemyDef.ID, err)
 		}
-		placeInstance(instance, enemy.Position, enemy.Yaw, v3(1, 1, 1))
-		instance.SetName(enemy.ID)
+
+		group := enemyDef.BattleGroup
+		if len(group) == 0 {
+			group = []string{enemyDef.Prefab}
+		}
+
+		enemy := overworld.NewEnemy(instance, enemyDef.Prefab, enemyDef.ID, group)
+		enemy.SetPlacement(
+			enemyDef.Position[0],
+			enemyDef.Position[1],
+			enemyDef.Position[2],
+			enemyDef.Yaw,
+		)
+		instance.SetName(enemyDef.ID)
 		scene.Root.AddChildren(instance)
+		enemies = append(enemies, enemy)
 	}
 
 	player := overworld.NewPlayer(BuildPlayerPrefab())
@@ -51,9 +71,16 @@ func BuildScene(mapDef *data.MapDef) (*tetra3d.Scene, *overworld.Player, error) 
 		spawn.Position[2],
 		spawn.Yaw,
 	)
+
+	// Warm point light follows the player
+	playerLight := tetra3d.NewPointLight("PlayerLight", 1.0, 0.92, 0.75, 0.4)
+	playerLight.Range = 5
+	playerLight.SetLocalPosition(0, 1.5, 0)
+	player.Root.AddChildren(playerLight)
+
 	scene.Root.AddChildren(player.Root)
 
-	return scene, player, nil
+	return scene, player, enemies, nil
 }
 
 func buildGround(ground data.GroundDef, palette scenePalette) tetra3d.INode {
@@ -68,28 +95,72 @@ func buildGround(ground data.GroundDef, palette scenePalette) tetra3d.INode {
 		sizeZ = 28
 	}
 
-	grass := newPrimitiveModel("Grass", tetra3d.NewPlaneMesh(2, 2), palette.grass, v3(0, 0, 0), v3(float32(sizeX), 1, float32(sizeZ)))
-	root.AddChildren(grass)
+	cellTypes, minX, maxX, minZ, maxZ := groundCellTypes(ground)
+	cubeMesh := tetra3d.NewCubeMesh()
+	for _, terrainType := range []string{"grass", "dirt", "stone", "sand", "water"} {
+		mat := terrainMaterial(terrainType, palette)
+		if mat == nil {
+			continue
+		}
 
-	pathA := newPrimitiveModel("PathA", tetra3d.NewPlaneMesh(2, 2), palette.dirt, v3(-1.2, 0.01, 2.2), v3(2.6, 1, 6.5))
-	pathA.SetLocalRotation(tetra3d.NewMatrix4Rotate(0, 1, 0, 0.38))
-	root.AddChildren(pathA)
+		merged := tetra3d.NewModel(
+			fmt.Sprintf("Ground_%s", terrainType),
+			tetra3d.NewMesh(fmt.Sprintf("Ground_%s_Mesh", terrainType)),
+		)
+		partModels := make([]*tetra3d.Model, 0, (maxX-minX+1)*(maxZ-minZ+1))
 
-	pathB := newPrimitiveModel("PathB", tetra3d.NewPlaneMesh(2, 2), palette.dirt, v3(2.4, 0.015, -2.8), v3(1.8, 1, 4.0))
-	pathB.SetLocalRotation(tetra3d.NewMatrix4Rotate(0, 1, 0, -0.32))
-	root.AddChildren(pathB)
+		for x := minX; x <= maxX; x++ {
+			for z := minZ; z <= maxZ; z++ {
+				if cellTypes[[2]int{x, z}] != terrainType {
+					continue
+				}
+				tile := newPrimitiveModel(
+					"GroundTile",
+					cubeMesh,
+					mat,
+					v3(float32(x), float32(-groundTileDepth/2), float32(z)),
+					v3(0.5, float32(groundTileDepth/2), 0.5),
+				)
+				partModels = append(partModels, tile)
+			}
+		}
+
+		if len(partModels) == 0 {
+			continue
+		}
+
+		merged.StaticMerge(partModels...)
+		root.AddChildren(merged)
+	}
 
 	return root
+}
+
+func terrainMaterial(terrainType string, palette scenePalette) *tetra3d.Material {
+	switch terrainType {
+	case "grass":
+		return palette.grass
+	case "dirt":
+		return palette.dirt
+	case "stone":
+		return palette.stone
+	case "sand":
+		return newMaterial("Sand", 0.76, 0.70, 0.50)
+	case "water":
+		return newMaterial("Water", 0.27, 0.47, 0.67)
+	default:
+		return nil
+	}
 }
 
 func buildLights() tetra3d.INode {
 	root := tetra3d.NewNode("Lights")
 
-	ambient := tetra3d.NewAmbientLight("Ambient", 1, 1, 1, 0.55)
-	sun := tetra3d.NewDirectionalLight("Sun", 1, 0.97, 0.92, 0.85)
+	ambient := tetra3d.NewAmbientLight("Ambient", 1, 1, 1, 0.34)
+	sun := tetra3d.NewDirectionalLight("Sun", 1, 0.96, 0.90, 1.1)
 	sun.SetLocalRotation(
-		tetra3d.NewMatrix4Rotate(0, 1, 0, float32(-math.Pi/3)).
-			Rotated(1, 0, 0, -0.95),
+		tetra3d.NewMatrix4Rotate(0, 1, 0, float32(sunYaw)).
+			Rotated(1, 0, 0, float32(sunPitch)),
 	)
 
 	root.AddChildren(ambient, sun)
@@ -275,4 +346,48 @@ func dequantizeWallCoord(v int) float64 {
 
 func quantizeWallValue(v float64) int {
 	return int(math.Round(v * 1000))
+}
+
+func groundCellTypes(ground data.GroundDef) (map[[2]int]string, int, int, int, int) {
+	terrainByCell := map[[2]int]string{}
+	width := int(math.Max(1, math.Round(ground.Size[0])))
+	depth := int(math.Max(1, math.Round(ground.Size[1])))
+	minX := -int(math.Floor(float64(width-1) / 2))
+	maxX := minX + width - 1
+	minZ := -int(math.Floor(float64(depth-1) / 2))
+	maxZ := minZ + depth - 1
+
+	for _, tile := range ground.Terrain {
+		cell := [2]int{
+			int(math.Round(tile.Position[0])),
+			int(math.Round(tile.Position[1])),
+		}
+		terrainByCell[cell] = tile.Type
+		if cell[0] < minX {
+			minX = cell[0]
+		}
+		if cell[0] > maxX {
+			maxX = cell[0]
+		}
+		if cell[1] < minZ {
+			minZ = cell[1]
+		}
+		if cell[1] > maxZ {
+			maxZ = cell[1]
+		}
+	}
+
+	cellTypes := make(map[[2]int]string, (maxX-minX+1)*(maxZ-minZ+1))
+	for x := minX; x <= maxX; x++ {
+		for z := minZ; z <= maxZ; z++ {
+			cell := [2]int{x, z}
+			terrainType, ok := terrainByCell[cell]
+			if !ok || terrainType == "" {
+				terrainType = "grass"
+			}
+			cellTypes[cell] = terrainType
+		}
+	}
+
+	return cellTypes, minX, maxX, minZ, maxZ
 }

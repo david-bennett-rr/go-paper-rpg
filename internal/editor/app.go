@@ -16,24 +16,27 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
 	"github.com/davidbennett/go-paper-rpg/internal/data"
+	"github.com/davidbennett/go-paper-rpg/internal/input"
 	"github.com/davidbennett/go-paper-rpg/internal/world"
 )
 
 const (
-	windowW       = 1400
-	windowH       = 900
-	sidebarWidth  = 320
-	buttonHeight  = 28
-	gridSpacing   = 1.0
-	defaultZoom   = 36.0
-	minZoom       = 12.0
-	maxZoom       = 96.0
-	snapIncrement = 1.0
-	wallHeight    = 1.5
-	rotationStep  = math.Pi / 12
-	defaultRadius = 1.0
-	iconTileSize  = 18.0
+	DefaultWindowW = 1400
+	DefaultWindowH = 900
+	sidebarWidth   = 320
+	buttonHeight   = 28
+	gridSpacing    = 1.0
+	defaultZoom    = 36.0
+	minZoom        = 12.0
+	maxZoom        = 96.0
+	snapIncrement  = 1.0
+	wallHeight     = 1.5
+	rotationStep   = math.Pi / 12
+	defaultRadius  = 1.0
+	iconTileSize   = 18.0
 )
+
+const flashDuration = 120 // frames (~2 seconds at 60fps)
 
 type Tool string
 
@@ -43,6 +46,7 @@ const (
 	ToolProp     Tool = "prop"
 	ToolWall     Tool = "wall"
 	ToolEnemy    Tool = "enemy"
+	ToolTerrain  Tool = "terrain"
 	ToolErase    Tool = "erase"
 )
 
@@ -57,6 +61,29 @@ const (
 	LayerEnemies   Layer = "enemies"
 )
 
+type terrainType struct {
+	id        string
+	name      string
+	editorClr color.RGBA
+}
+
+var terrainTypes = []terrainType{
+	{id: "grass", name: "Grass", editorClr: color.RGBA{R: 90, G: 130, B: 82, A: 255}},
+	{id: "dirt", name: "Dirt", editorClr: color.RGBA{R: 140, G: 110, B: 70, A: 255}},
+	{id: "stone", name: "Stone", editorClr: color.RGBA{R: 130, G: 130, B: 135, A: 255}},
+	{id: "sand", name: "Sand", editorClr: color.RGBA{R: 194, G: 178, B: 128, A: 255}},
+	{id: "water", name: "Water", editorClr: color.RGBA{R: 70, G: 120, B: 170, A: 255}},
+}
+
+func terrainColor(id string) color.RGBA {
+	for _, t := range terrainTypes {
+		if t.id == id {
+			return t.editorClr
+		}
+	}
+	return terrainTypes[0].editorClr
+}
+
 type App struct {
 	assetsFS       fs.FS
 	assetsDir      string
@@ -66,10 +93,11 @@ type App struct {
 	currentMap     *data.MapDef
 	currentMapPath string
 
-	selectedTool  Tool
-	selectedProp  string
-	selectedEnemy string
-	brushYaw      float64
+	selectedTool    Tool
+	selectedProp    string
+	selectedEnemy   string
+	selectedTerrain string
+	brushYaw        float64
 
 	layerVisible map[Layer]bool
 
@@ -77,13 +105,22 @@ type App struct {
 	camX float64
 	camZ float64
 
+	layoutW int
+	layoutH int
+
 	panning        bool
 	lastMouse      point
 	brushCellValid bool
 	lastBrushCell  point
 
-	unsaved bool
-	status  string
+	onClose  func(roomID string) error
+	input    *input.Manager
+	ownInput bool
+
+	unsaved    bool
+	status     string
+	flashMsg   string
+	flashTimer int
 }
 
 type point struct {
@@ -123,6 +160,23 @@ func NewApp() (*App, error) {
 		return nil, err
 	}
 
+	return newAppWithResources(fsys, assetsDir, gameData, "", DefaultWindowW, DefaultWindowH, nil, nil)
+}
+
+func NewEmbeddedApp(assetsFS fs.FS, assetsDir string, gameData *data.GameData, roomID string, onClose func(roomID string) error, inputMgr *input.Manager) (*App, error) {
+	return newAppWithResources(assetsFS, assetsDir, gameData, roomID, DefaultWindowW, DefaultWindowH, onClose, inputMgr)
+}
+
+func newAppWithResources(assetsFS fs.FS, assetsDir string, gameData *data.GameData, roomID string, layoutW, layoutH int, onClose func(roomID string) error, inputMgr *input.Manager) (*App, error) {
+	if gameData == nil {
+		return nil, errors.New("missing game data")
+	}
+	ownInput := false
+	if inputMgr == nil {
+		inputMgr = input.NewManager()
+		ownInput = true
+	}
+
 	roomIDs := make([]string, 0, len(gameData.Rooms))
 	for id, room := range gameData.Rooms {
 		if room.MapFile != "" {
@@ -135,13 +189,14 @@ func NewApp() (*App, error) {
 	}
 
 	app := &App{
-		assetsFS:      fsys,
+		assetsFS:      assetsFS,
 		assetsDir:     assetsDir,
 		rooms:         gameData.Rooms,
 		roomIDs:       roomIDs,
-		selectedTool:  ToolProp,
-		selectedProp:  firstPrefabID(world.PropPrefabInfos()),
-		selectedEnemy: firstPrefabID(world.EnemyPrefabInfos()),
+		selectedTool:    ToolProp,
+		selectedProp:    firstPrefabID(world.PropPrefabInfos()),
+		selectedEnemy:   firstPrefabID(world.EnemyPrefabInfos()),
+		selectedTerrain: "dirt",
 		layerVisible: map[Layer]bool{
 			LayerGrid:      true,
 			LayerSpawn:     true,
@@ -150,25 +205,49 @@ func NewApp() (*App, error) {
 			LayerWalls:     true,
 			LayerEnemies:   true,
 		},
-		zoom:   defaultZoom,
-		status: "Ready",
+		zoom:     defaultZoom,
+		layoutW:  layoutW,
+		layoutH:  layoutH,
+		onClose:  onClose,
+		input:    inputMgr,
+		ownInput: ownInput,
+		status:   "Ready",
 	}
 
-	if err := app.loadRoom(preferredRoomID(roomIDs)); err != nil {
+	if roomID == "" {
+		roomID = preferredRoomID(roomIDs)
+	}
+
+	if err := app.loadRoom(roomID); err != nil {
 		return nil, err
 	}
 
 	return app, nil
 }
 
+func (a *App) flash(msg string) {
+	a.flashMsg = msg
+	a.flashTimer = flashDuration
+}
+
 func (a *App) Update() error {
-	l := a.buildLayout(windowW, windowH)
+	if a.ownInput && a.input != nil {
+		a.input.Update()
+	}
+
+	if a.flashTimer > 0 {
+		a.flashTimer--
+	}
+
+	l := a.buildLayout(a.layoutW, a.layoutH)
 	mx, my := ebiten.CursorPosition()
 	cursor := point{x: float64(mx), z: float64(my)}
 
 	a.handleZoom(l, cursor)
 	a.handlePan(l, cursor)
-	a.handleShortcuts()
+	if handled := a.handleShortcuts(); handled {
+		return nil
+	}
 
 	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 		if clicked, ok := a.buttonAt(l, cursor); ok {
@@ -196,15 +275,33 @@ func (a *App) Update() error {
 }
 
 func (a *App) Draw(screen *ebiten.Image) {
-	screen.Fill(color.RGBA{R: 30, G: 35, B: 40, A: 255})
+	screen.Fill(color.RGBA{R: 22, G: 24, B: 28, A: 255})
 
-	l := a.buildLayout(windowW, windowH)
+	l := a.buildLayout(a.layoutW, a.layoutH)
 	a.drawViewport(screen, l.viewport)
 	a.drawSidebar(screen, l)
+
+	if a.flashTimer > 0 {
+		a.drawFlash(screen, l.viewport)
+	}
+}
+
+func (a *App) drawFlash(screen *ebiten.Image, viewport rect) {
+	alpha := uint8(255)
+	if a.flashTimer < 30 {
+		alpha = uint8(a.flashTimer * 255 / 30)
+	}
+	msgW := float64(len(a.flashMsg)*7 + 24)
+	msgH := 28.0
+	x := viewport.x + viewport.w/2 - msgW/2
+	y := viewport.y + 16
+	ebitenutil.DrawRect(screen, x, y, msgW, msgH, color.RGBA{R: 40, G: 100, B: 40, A: alpha})
+	vector.StrokeRect(screen, float32(x), float32(y), float32(msgW), float32(msgH), 1, color.RGBA{R: 80, G: 180, B: 80, A: alpha}, false)
+	ebitenutil.DebugPrintAt(screen, a.flashMsg, int(x)+12, int(y)+8)
 }
 
 func (a *App) Layout(_, _ int) (int, int) {
-	return windowW, windowH
+	return a.layoutW, a.layoutH
 }
 
 func (a *App) buildLayout(width, height int) layout {
@@ -221,6 +318,17 @@ func (a *App) buildLayout(width, height int) layout {
 		active: false,
 		bounds: rect{x: 12, y: y, w: sidebar.w - 24, h: buttonHeight},
 	})
+
+	if a.onClose != nil {
+		y += buttonHeight + 6
+		buttons = append(buttons, uiButton{
+			kind:   "close",
+			value:  "close",
+			label:  "Back To Game",
+			active: false,
+			bounds: rect{x: 12, y: y, w: sidebar.w - 24, h: buttonHeight},
+		})
+	}
 
 	y += buttonHeight + 18
 	for _, roomID := range a.roomIDs {
@@ -244,6 +352,7 @@ func (a *App) buildLayout(width, height int) layout {
 		{ToolProp, "Prop"},
 		{ToolWall, "Wall Brush"},
 		{ToolEnemy, "Enemy"},
+		{ToolTerrain, "Terrain"},
 		{ToolErase, "Erase Brush"},
 	}
 	for i, tool := range toolButtons {
@@ -262,7 +371,7 @@ func (a *App) buildLayout(width, height int) layout {
 			},
 		})
 	}
-	y += 3*(buttonHeight+6) + 14
+	y += 4*(buttonHeight+6) + 14
 
 	layerButtons := []struct {
 		layer Layer
@@ -330,6 +439,17 @@ func (a *App) currentPrefabButtons(sidebarW, startY float64) []uiButton {
 			})
 			currentY += buttonHeight + 6
 		}
+	case ToolTerrain:
+		for _, t := range terrainTypes {
+			buttons = append(buttons, uiButton{
+				kind:   "terrain",
+				value:  t.id,
+				label:  t.name,
+				active: a.selectedTerrain == t.id,
+				bounds: rect{x: 12, y: currentY, w: sidebarW - 24, h: buttonHeight},
+			})
+			currentY += buttonHeight + 6
+		}
 	}
 
 	return buttons
@@ -374,7 +494,7 @@ func (a *App) handlePan(view layout, cursor point) {
 	a.camZ -= dz / a.zoom
 }
 
-func (a *App) handleShortcuts() {
+func (a *App) handleShortcuts() bool {
 	if inpututil.IsKeyJustPressed(ebiten.KeyQ) {
 		a.brushYaw -= rotationStep
 	}
@@ -387,13 +507,32 @@ func (a *App) handleShortcuts() {
 		if err := a.saveCurrentMap(); err != nil {
 			a.status = err.Error()
 		}
+		return true
 	}
+
+	menuPressed := inpututil.IsKeyJustPressed(ebiten.KeyEscape) || inpututil.IsKeyJustPressed(ebiten.KeyF1)
+	cancelPressed := false
+	if a.input != nil && a.input.Handler() != nil {
+		menuPressed = menuPressed || a.input.Handler().ActionIsJustPressed(input.ActionMenu)
+		cancelPressed = a.input.Handler().ActionIsJustPressed(input.ActionCancel)
+	}
+
+	if a.onClose != nil && (menuPressed || cancelPressed) {
+		if err := a.exitToGame(); err != nil {
+			a.status = err.Error()
+		}
+		return true
+	}
+
+	return false
 }
 
 func (a *App) handleButton(button uiButton) error {
 	switch button.kind {
 	case "save":
 		return a.saveCurrentMap()
+	case "close":
+		return a.exitToGame()
 	case "room":
 		if a.unsaved {
 			if err := a.saveCurrentMap(); err != nil {
@@ -409,6 +548,9 @@ func (a *App) handleButton(button uiButton) error {
 		return nil
 	case "enemy":
 		a.selectedEnemy = button.value
+		return nil
+	case "terrain":
+		a.selectedTerrain = button.value
 		return nil
 	case "layer":
 		layer := Layer(button.value)
@@ -468,7 +610,49 @@ func (a *App) handleViewportAction(pos point, justPressed bool) {
 			a.unsaved = true
 			a.status = "Added enemy"
 		}
+	case ToolTerrain:
+		a.paintTerrain(cell)
 	}
+}
+
+func (a *App) paintTerrain(cell point) {
+	if a.sameBrushCell(cell) {
+		return
+	}
+	a.lastBrushCell = cell
+	a.brushCellValid = true
+
+	pos := [2]float64{cell.x, cell.z}
+	// If painting grass, remove the tile (grass is the default)
+	if a.selectedTerrain == "grass" {
+		for i, t := range a.currentMap.Ground.Terrain {
+			if t.Position == pos {
+				a.currentMap.Ground.Terrain = append(a.currentMap.Ground.Terrain[:i], a.currentMap.Ground.Terrain[i+1:]...)
+				a.unsaved = true
+				a.status = "Cleared terrain"
+				return
+			}
+		}
+		return
+	}
+	// Update existing or append new
+	for i, t := range a.currentMap.Ground.Terrain {
+		if t.Position == pos {
+			if t.Type == a.selectedTerrain {
+				return
+			}
+			a.currentMap.Ground.Terrain[i].Type = a.selectedTerrain
+			a.unsaved = true
+			a.status = "Painted " + a.selectedTerrain
+			return
+		}
+	}
+	a.currentMap.Ground.Terrain = append(a.currentMap.Ground.Terrain, data.TerrainDef{
+		Position: pos,
+		Type:     a.selectedTerrain,
+	})
+	a.unsaved = true
+	a.status = "Painted " + a.selectedTerrain
 }
 
 func (a *App) paintWallCell(cell point) {
@@ -499,7 +683,7 @@ func (a *App) eraseAtCell(cell point) {
 	a.lastBrushCell = cell
 	a.brushCellValid = true
 
-	if a.eraseWallAtCell(cell) || a.erasePropAtCell(cell) || a.eraseEnemyAtCell(cell) || a.eraseLocationAtCell(cell) {
+	if a.eraseWallAtCell(cell) || a.erasePropAtCell(cell) || a.eraseEnemyAtCell(cell) || a.eraseLocationAtCell(cell) || a.eraseTerrainAtCell(cell) {
 		a.unsaved = true
 		a.status = "Erased"
 	}
@@ -548,6 +732,17 @@ func (a *App) eraseEnemyAtCell(cell point) bool {
 	return false
 }
 
+func (a *App) eraseTerrainAtCell(cell point) bool {
+	pos := [2]float64{cell.x, cell.z}
+	for i, t := range a.currentMap.Ground.Terrain {
+		if t.Position == pos {
+			a.currentMap.Ground.Terrain = append(a.currentMap.Ground.Terrain[:i], a.currentMap.Ground.Terrain[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
 func (a *App) eraseLocationAtCell(cell point) bool {
 	for i, location := range a.currentMap.Locations {
 		if sameCell(cell, point{x: location.Position[0], z: location.Position[2]}) {
@@ -584,30 +779,27 @@ func (a *App) drawViewport(screen *ebiten.Image, viewport rect) {
 }
 
 func (a *App) drawSidebar(screen *ebiten.Image, l layout) {
-	ebitenutil.DrawRect(screen, l.sidebar.x, l.sidebar.y, l.sidebar.w, l.sidebar.h, color.RGBA{R: 237, G: 236, B: 230, A: 255})
-	vector.StrokeRect(screen, float32(l.sidebar.x), float32(l.sidebar.y), float32(l.sidebar.w), float32(l.sidebar.h), 2, color.RGBA{R: 130, G: 118, B: 97, A: 255}, false)
+	ebitenutil.DrawRect(screen, l.sidebar.x, l.sidebar.y, l.sidebar.w, l.sidebar.h, color.RGBA{R: 32, G: 34, B: 38, A: 255})
+	vector.StrokeRect(screen, float32(l.sidebar.x), float32(l.sidebar.y), float32(l.sidebar.w), float32(l.sidebar.h), 2, color.RGBA{R: 55, G: 58, B: 64, A: 255}, false)
 
 	info := []string{
-		"Simple Grid Map Editor",
-		"",
 		fmt.Sprintf("Room: %s", a.currentRoom),
 		fmt.Sprintf("Tool: %s", toolLabel(a.selectedTool)),
-		fmt.Sprintf("Brush Yaw: %.0f deg", a.brushYaw*180/math.Pi),
-		fmt.Sprintf("Unsaved: %t", a.unsaved),
-		"",
-		"Controls:",
-		"Left drag: paint/use tool",
-		"Right drag: pan",
-		"Wheel: zoom",
-		"Q / E: rotate brush",
-		"Ctrl+S: save",
-		"",
-		"Walls and erase use brush mode.",
-		"",
-		"Status:",
-		a.status,
+		fmt.Sprintf("Yaw: %.0f deg", a.brushYaw*180/math.Pi),
 	}
-	ebitenutil.DebugPrintAt(screen, strings.Join(info, "\n"), 12, int(l.sidebar.h)-280)
+	if a.unsaved {
+		info = append(info, "* Unsaved changes")
+	}
+	info = append(info,
+		"",
+		"LMB: paint  RMB: pan  Wheel: zoom",
+		"Q/E: rotate  Ctrl+S: save",
+	)
+	if a.onClose != nil {
+		info = append(info, "Esc: back to game")
+	}
+	info = append(info, "", a.status)
+	ebitenutil.DebugPrintAt(screen, strings.Join(info, "\n"), 12, int(l.sidebar.h)-200)
 
 	for _, button := range l.buttons {
 		a.drawButton(screen, button)
@@ -615,11 +807,11 @@ func (a *App) drawSidebar(screen *ebiten.Image, l layout) {
 }
 
 func (a *App) drawButton(screen *ebiten.Image, button uiButton) {
-	bg := color.RGBA{R: 248, G: 245, B: 236, A: 255}
-	border := color.RGBA{R: 140, G: 126, B: 101, A: 255}
+	bg := color.RGBA{R: 48, G: 51, B: 56, A: 255}
+	border := color.RGBA{R: 68, G: 72, B: 80, A: 255}
 	if button.active {
-		bg = color.RGBA{R: 185, G: 214, B: 178, A: 255}
-		border = color.RGBA{R: 95, G: 127, B: 89, A: 255}
+		bg = color.RGBA{R: 56, G: 90, B: 56, A: 255}
+		border = color.RGBA{R: 80, G: 130, B: 80, A: 255}
 	}
 	ebitenutil.DrawRect(screen, button.bounds.x, button.bounds.y, button.bounds.w, button.bounds.h, bg)
 	vector.StrokeRect(screen, float32(button.bounds.x), float32(button.bounds.y), float32(button.bounds.w), float32(button.bounds.h), 1, border, false)
@@ -628,6 +820,13 @@ func (a *App) drawButton(screen *ebiten.Image, button uiButton) {
 
 func (a *App) drawGround(screen *ebiten.Image, viewport rect) {
 	ebitenutil.DrawRect(screen, viewport.x, viewport.y, viewport.w, viewport.h, color.RGBA{R: 90, G: 130, B: 82, A: 255})
+
+	for _, t := range a.currentMap.Ground.Terrain {
+		clr := terrainColor(t.Type)
+		cell := point{x: t.Position[0], z: t.Position[1]}
+		cellRect := a.cellScreenRect(viewport, cell)
+		ebitenutil.DrawRect(screen, cellRect.x, cellRect.y, cellRect.w, cellRect.h, clr)
+	}
 }
 
 func (a *App) drawGrid(screen *ebiten.Image, viewport rect) {
@@ -819,7 +1018,20 @@ func (a *App) saveCurrentMap() error {
 	}
 	a.unsaved = false
 	a.status = "Saved " + filepath.ToSlash(a.currentMapPath)
+	a.flash("Saved!")
 	return nil
+}
+
+func (a *App) exitToGame() error {
+	if a.onClose == nil {
+		return nil
+	}
+	if a.unsaved {
+		if err := a.saveCurrentMap(); err != nil {
+			return err
+		}
+	}
+	return a.onClose(a.currentRoom)
 }
 
 func preferredRoomID(roomIDs []string) string {
@@ -863,6 +1075,8 @@ func toolLabel(tool Tool) string {
 		return "Wall Brush"
 	case ToolEnemy:
 		return "Enemy"
+	case ToolTerrain:
+		return "Terrain"
 	case ToolErase:
 		return "Erase Brush"
 	default:

@@ -130,7 +130,7 @@ func newScenePalette() scenePalette {
 
 func buildPineTreePrefab(palette scenePalette) tetra3d.INode {
 	root := tetra3d.NewNode("TreePine")
-	trunkMesh := tetra3d.NewCylinderMesh(6, 0.18, 1.5, true)
+	trunkMesh := tetra3d.NewCylinderMesh(12, 0.18, 1.5, true)
 	foliageMesh := tetra3d.NewPrismMesh()
 
 	root.AddChildren(
@@ -144,8 +144,8 @@ func buildPineTreePrefab(palette scenePalette) tetra3d.INode {
 
 func buildRoundTreePrefab(palette scenePalette) tetra3d.INode {
 	root := tetra3d.NewNode("TreeRound")
-	trunkMesh := tetra3d.NewCylinderMesh(6, 0.16, 1.2, true)
-	foliageMesh := tetra3d.NewIcosphereMesh(0)
+	trunkMesh := tetra3d.NewCylinderMesh(12, 0.16, 1.2, true)
+	foliageMesh := tetra3d.NewIcosphereMesh(2)
 
 	root.AddChildren(
 		newPrimitiveModel("Trunk", trunkMesh, palette.bark, v3(0, 0.6, 0), v3(1, 1, 1)),
@@ -157,7 +157,7 @@ func buildRoundTreePrefab(palette scenePalette) tetra3d.INode {
 
 func buildRockPrefab(palette scenePalette) tetra3d.INode {
 	root := tetra3d.NewNode("Rock")
-	body := newPrimitiveModel("Body", tetra3d.NewIcosphereMesh(0), palette.stone, v3(0, 0.28, 0), v3(0.5, 0.32, 0.42))
+	body := newPrimitiveModel("Body", tetra3d.NewIcosphereMesh(2), palette.stone, v3(0, 0.28, 0), v3(0.5, 0.32, 0.42))
 	body.SetLocalRotation(
 		tetra3d.NewMatrix4Rotate(0, 1, 0, 0.35).
 			Rotated(1, 0, 0, -0.18),
@@ -170,7 +170,7 @@ func buildPlayerPrefab(palette scenePalette) tetra3d.INode {
 	root := tetra3d.NewNode("Player")
 
 	cubeMesh := tetra3d.NewCubeMesh()
-	headMesh := tetra3d.NewIcosphereMesh(0)
+	headMesh := tetra3d.NewIcosphereMesh(2)
 	hatMesh := tetra3d.NewPrismMesh()
 
 	root.AddChildren(
@@ -281,7 +281,9 @@ func anchorNodeToTile(node tetra3d.INode) tetra3d.INode {
 		return node
 	}
 
-	centerX, centerZ := nodeSupportCenter(node, minY, maxY, minX, maxX, minZ, maxZ)
+	supportMinX, supportMaxX, supportMinZ, supportMaxZ := nodeSupportBounds(node, minY, maxY, minX, maxX, minZ, maxZ)
+	centerX := (supportMinX + supportMaxX) / 2
+	centerZ := (supportMinZ + supportMaxZ) / 2
 
 	const groundInset = 0.02
 
@@ -333,7 +335,7 @@ func nodeGeometryBounds(node tetra3d.INode) (minX, maxX, minY, maxY, minZ, maxZ 
 	return
 }
 
-func nodeSupportCenter(node tetra3d.INode, minY, maxY, fallbackMinX, fallbackMaxX, fallbackMinZ, fallbackMaxZ float32) (float32, float32) {
+func nodeSupportBounds(node tetra3d.INode, minY, maxY, fallbackMinX, fallbackMaxX, fallbackMinZ, fallbackMaxZ float32) (float32, float32, float32, float32) {
 	spanY := maxY - minY
 	supportThreshold := float32(0.05)
 	if dynamicThreshold := spanY * 0.08; dynamicThreshold > supportThreshold {
@@ -377,7 +379,7 @@ func nodeSupportCenter(node tetra3d.INode, minY, maxY, fallbackMinX, fallbackMax
 		maxZ = fallbackMaxZ
 	}
 
-	return (minX + maxX) / 2, (minZ + maxZ) / 2
+	return minX, maxX, minZ, maxZ
 }
 
 func walkModels(node tetra3d.INode, fn func(model *tetra3d.Model)) {

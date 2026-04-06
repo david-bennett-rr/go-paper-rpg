@@ -1,11 +1,14 @@
 package app
 
 import (
+	"fmt"
 	"image/color"
+	"io/fs"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
 	"github.com/davidbennett/go-paper-rpg/internal/data"
+	"github.com/davidbennett/go-paper-rpg/internal/editor"
 	"github.com/davidbennett/go-paper-rpg/internal/input"
 	"github.com/davidbennett/go-paper-rpg/internal/render"
 	"github.com/davidbennett/go-paper-rpg/internal/state"
@@ -15,9 +18,14 @@ import (
 const startRoomID = "test_room"
 
 type Game struct {
-	inputMgr *input.Manager
-	stateMgr *state.Manager
-	renderer *render.Renderer
+	inputMgr  *input.Manager
+	stateMgr  *state.Manager
+	renderer  *render.Renderer
+	assetsFS  fs.FS
+	assetsDir string
+	gameData  *data.GameData
+	layoutW   int
+	layoutH   int
 }
 
 func NewGame() *Game {
@@ -26,7 +34,7 @@ func NewGame() *Game {
 	g.stateMgr = state.NewManager(g.inputMgr)
 	g.renderer = render.NewRenderer()
 
-	fsys, _, err := data.OpenAssetsFS()
+	fsys, assetsDir, err := data.OpenAssetsFS()
 	if err != nil {
 		panic(err)
 	}
@@ -34,27 +42,14 @@ func NewGame() *Game {
 	if err != nil {
 		panic(err)
 	}
+	g.assetsFS = fsys
+	g.assetsDir = assetsDir
+	g.gameData = gameData
+	g.setPlayWindow()
 
-	roomDef, ok := gameData.Rooms[startRoomID]
-	if !ok {
-		panic("start room not found: " + startRoomID)
-	}
-	if roomDef.MapFile == "" {
-		panic("start room missing map_file: " + startRoomID)
-	}
-
-	mapDef, err := data.LoadMap(fsys, roomDef.MapFile)
-	if err != nil {
+	if err := g.switchToOverworld(startRoomID); err != nil {
 		panic(err)
 	}
-
-	scene, player, err := world.BuildScene(mapDef)
-	if err != nil {
-		panic(err)
-	}
-
-	ow := state.NewOverworldState(g.stateMgr.Shared(), g.renderer, player, scene)
-	g.stateMgr.Push(ow)
 
 	return g
 }
@@ -70,5 +65,61 @@ func (g *Game) Draw(screen *ebiten.Image) {
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return render.InternalW, render.InternalH
+	if g.layoutW > 0 && g.layoutH > 0 {
+		// Editor mode uses a fixed layout.
+		return g.layoutW, g.layoutH
+	}
+	g.renderer.Resize(outsideWidth, outsideHeight)
+	return outsideWidth, outsideHeight
+}
+
+func (g *Game) openEditor(roomID string) error {
+	editorApp, err := editor.NewEmbeddedApp(g.assetsFS, g.assetsDir, g.gameData, roomID, g.switchToOverworld, g.inputMgr)
+	if err != nil {
+		return err
+	}
+
+	g.stateMgr.Switch(state.NewEditorState(editorApp, g.setEditorWindow))
+	return nil
+}
+
+func (g *Game) switchToOverworld(roomID string) error {
+	roomDef, ok := g.gameData.Rooms[roomID]
+	if !ok {
+		return fmt.Errorf("room not found: %s", roomID)
+	}
+	if roomDef.MapFile == "" {
+		return fmt.Errorf("room missing map_file: %s", roomID)
+	}
+
+	mapDef, err := data.LoadMap(g.assetsFS, roomDef.MapFile)
+	if err != nil {
+		return err
+	}
+
+	scene, player, enemies, err := world.BuildScene(mapDef)
+	if err != nil {
+		return err
+	}
+
+	ow := state.NewOverworldState(g.stateMgr.Shared(), g.renderer, roomID, player, enemies, scene, g.gameData, g.openEditor)
+	g.setPlayWindow()
+	if g.stateMgr.Current() == nil {
+		g.stateMgr.Push(ow)
+	} else {
+		g.stateMgr.Switch(ow)
+	}
+	return nil
+}
+
+func (g *Game) setPlayWindow() {
+	g.layoutW = 0
+	g.layoutH = 0
+	ebiten.SetWindowTitle("Paper RPG")
+}
+
+func (g *Game) setEditorWindow() {
+	g.layoutW = editor.DefaultWindowW
+	g.layoutH = editor.DefaultWindowH
+	ebiten.SetWindowTitle("Paper RPG - Map Editor")
 }

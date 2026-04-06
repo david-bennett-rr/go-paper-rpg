@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	ebiten.SetWindowSize(1400, 900)
+	ebiten.SetWindowSize(editor.DefaultWindowW, editor.DefaultWindowH)
 	ebiten.SetWindowTitle("Paper RPG Map Editor")
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 
