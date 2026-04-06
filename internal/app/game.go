@@ -102,7 +102,7 @@ func (g *Game) switchToOverworld(roomID string) error {
 		return err
 	}
 
-	ow := state.NewOverworldState(g.stateMgr.Shared(), g.renderer, roomID, player, enemies, scene, g.gameData, g.openEditor)
+	ow := state.NewOverworldState(g.stateMgr.Shared(), g.renderer, roomID, mapDef, player, enemies, scene, g.gameData, g.openEditor)
 	g.setPlayWindow()
 	if g.stateMgr.Current() == nil {
 		g.stateMgr.Push(ow)

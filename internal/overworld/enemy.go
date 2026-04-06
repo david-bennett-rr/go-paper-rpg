@@ -10,6 +10,7 @@ const (
 	EnemySpeed      = 0.03
 	EnemyChaseRange = 8.0
 	CollisionDist   = 0.6
+	EnemyRadius     = 0.24
 )
 
 // Enemy is an overworld enemy that chases the player.
@@ -42,7 +43,7 @@ func (e *Enemy) SetPlacement(x, y, z, yaw float64) {
 }
 
 // Update moves the enemy toward the player if in range.
-func (e *Enemy) Update(playerX, playerZ float64) {
+func (e *Enemy) Update(playerX, playerZ float64, blocked func(x, z, radius float64) bool) {
 	if e.Defeated {
 		return
 	}
@@ -57,8 +58,7 @@ func (e *Enemy) Update(playerX, playerZ float64) {
 
 	nx := dx / dist
 	nz := dz / dist
-	e.X += nx * EnemySpeed
-	e.Z += nz * EnemySpeed
+	e.X, e.Z = moveWithCollision(e.X, e.Z, nx*EnemySpeed, nz*EnemySpeed, EnemyRadius, blocked)
 	e.Yaw = math.Atan2(nx, nz)
 	e.syncModel()
 }

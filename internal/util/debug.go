@@ -28,10 +28,3 @@ func DebugLog(format string, args ...any) {
 	fmt.Fprintf(debugFile, format+"\n", args...)
 	debugFile.Sync()
 }
-
-// CloseDebugLog flushes and closes the debug log file.
-func CloseDebugLog() {
-	if debugFile != nil {
-		debugFile.Close()
-	}
-}

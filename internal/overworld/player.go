@@ -12,6 +12,7 @@ import (
 const (
 	PlayerSpeed    = 0.08
 	PlayerEyeLevel = 0.9
+	PlayerRadius   = 0.26
 )
 
 // Player represents the player character in the overworld.
@@ -30,13 +31,12 @@ func NewPlayer(root tetra3d.INode) *Player {
 	return p
 }
 
-func (p *Player) Update(inp *input.Manager) {
+func (p *Player) Update(inp *input.Manager, blocked func(x, z, radius float64) bool) {
 	screenX, screenY := inp.MoveDir()
 	dx, dz := render.ScreenToWorldMove(screenX, screenY)
 
 	if dx != 0 || dz != 0 {
-		p.X += dx * PlayerSpeed
-		p.Z += dz * PlayerSpeed
+		p.X, p.Z = moveWithCollision(p.X, p.Z, dx*PlayerSpeed, dz*PlayerSpeed, PlayerRadius, blocked)
 		p.faceMovement(dx, dz)
 	}
 

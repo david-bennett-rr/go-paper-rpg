@@ -137,9 +137,11 @@ func NormalizeMap(mapDef *MapDef) {
 		if mapDef.Props[i].Scale == [3]float64{} {
 			mapDef.Props[i].Scale = [3]float64{1, 1, 1}
 		}
-		mapDef.Props[i].Scale[0] = snapWhole(mapDef.Props[i].Scale[0])
-		mapDef.Props[i].Scale[1] = snapWhole(mapDef.Props[i].Scale[1])
-		mapDef.Props[i].Scale[2] = snapWhole(mapDef.Props[i].Scale[2])
+		for axis := range mapDef.Props[i].Scale {
+			if mapDef.Props[i].Scale[axis] == 0 {
+				mapDef.Props[i].Scale[axis] = 1
+			}
+		}
 	}
 
 	for i := range mapDef.Walls {

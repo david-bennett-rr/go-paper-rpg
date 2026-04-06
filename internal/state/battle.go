@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"image"
 	"image/color"
 	"math"
 	"math/rand/v2"
@@ -24,12 +25,12 @@ import (
 type battlePhase int
 
 const (
-	phasePlayerMenu   battlePhase = iota
+	phasePlayerMenu battlePhase = iota
 	phasePlayerTarget
 	phasePlayerAction
 	phasePlayerResult
-	phaseEnemyWindup  // Wolf lunges, defend bar appears
-	phaseEnemyDefend  // Player can press B to defend
+	phaseEnemyWindup // Wolf lunges, defend bar appears
+	phaseEnemyDefend // Player can press B to defend
 	phaseEnemyResult
 	phaseVictory
 	phaseDefeat
@@ -43,12 +44,13 @@ const (
 
 // battleFoe is an enemy combatant.
 type battleFoe struct {
-	Name   string
-	Stats  rpg.Stats
-	Moves  []*rpg.Move
-	AI     []data.AIPattern
-	Prefab string
-	Node   tetra3d.INode // 3D model in battle scene
+	Name    string
+	Stats   rpg.Stats
+	Moves   []*rpg.Move
+	AI      []data.AIPattern
+	Prefab  string
+	Node    tetra3d.INode // 3D model in battle scene
+	BasePos tetra3d.Vector3
 }
 
 type battlePlayerRig struct {
@@ -82,12 +84,14 @@ type BattleState struct {
 	pendingFoe   *battleFoe
 
 	// Animation state
-	flinchTimer   int  // counts down during flinch
-	flinchTarget  int  // -1 = player, 0+ = foe index
-	windupTimer   int  // counts down during enemy windup/lunge
-	windupFoeIdx  int
+	flinchTimer  int // counts down during flinch
+	flinchTarget int // -1 = player, 0+ = foe index
+	windupTimer  int // counts down during enemy windup/lunge
+	windupFoeIdx int
 
 	screenW, screenH int
+	textBuf          *ebiten.Image // reusable buffer for scaled text rendering
+	textBufW         int
 }
 
 func NewBattleState(shared *SharedContext, renderer *render.Renderer, enemyDefs []data.EnemyDef, foePrefabs []string) *BattleState {
@@ -176,6 +180,7 @@ func (s *BattleState) buildBattleScene() {
 		node.SetLocalRotation(tetra3d.NewMatrix4Rotate(0, 1, 0, -math.Pi/6))
 		scene.Root.AddChildren(node)
 		foe.Node = node
+		foe.BasePos = node.LocalPosition()
 	}
 
 	s.scene = scene
@@ -185,12 +190,6 @@ func (s *BattleState) Enter(prev GameState) {}
 func (s *BattleState) Exit()                {}
 
 func (s *BattleState) Update() error {
-	// Tick flinch animation
-	if s.flinchTimer > 0 {
-		s.flinchTimer--
-		s.applyFlinchAnimation()
-	}
-
 	switch s.phase {
 	case phasePlayerMenu:
 		s.updatePlayerMenu()
@@ -211,7 +210,12 @@ func (s *BattleState) Update() error {
 	}
 
 	if s.phase != phasePlayerAction {
-		s.resetPlayerAnimation()
+		s.resetPlayerAnimation(!(s.flinchTimer > 0 && s.flinchTarget == -1))
+	}
+
+	if s.flinchTimer > 0 {
+		s.flinchTimer--
+		s.applyFlinchAnimation()
 	}
 
 	return nil
@@ -235,6 +239,12 @@ func (s *BattleState) updatePlayerMenu() {
 	if h.ActionIsJustPressed(input.ActionConfirm) {
 		s.selectedMove = moves[s.menuCursor]
 		living := s.livingFoes()
+		if len(living) == 0 {
+			s.phase = phaseVictory
+			s.resultText = "Victory!"
+			s.resultTimer = resultDisplayFrames * 2
+			return
+		}
 		if len(living) == 1 {
 			s.targetCursor = living[0]
 			s.startActionCommand()
@@ -326,7 +336,9 @@ func (s *BattleState) updateEnemyWindup() {
 	foe := s.foes[s.turnFoeIndex]
 	move := s.pickEnemyMove(foe)
 	if move == nil {
+		// Skip this foe and check if any more need to act
 		s.turnFoeIndex++
+		s.phase = s.nextAfterEnemyResult()
 		return
 	}
 
@@ -353,8 +365,7 @@ func (s *BattleState) updateEnemyDefend() {
 	s.defendCmd.Update(s.shared.Input)
 
 	if s.defendCmd.IsComplete() {
-		// Calculate damage with defense reduction
-		cmdResult := action.ResultFromQuality(action.QualityNice)
+		cmdResult := action.ResultFromQuality(action.QualityMiss)
 		baseDmg := battle.CalculateDamage(&s.pendingFoe.Stats, s.pendingMove, &s.party.Mario.Stats, cmdResult)
 
 		defenseResult := s.defendCmd.Result()
@@ -567,7 +578,7 @@ func (s *BattleState) drawBattleUI(screen *ebiten.Image) {
 	case phasePlayerAction:
 		s.drawScaledText(screen, s.playerActionPrompt(), padX, padY, scale)
 		if s.actionCmd != nil {
-			s.drawActionBar(screen, panelY+60*scale, scale)
+			s.drawActionBar(screen)
 		}
 
 	case phaseEnemyWindup:
@@ -592,9 +603,7 @@ func (s *BattleState) drawBattleUI(screen *ebiten.Image) {
 	}
 }
 
-func (s *BattleState) drawActionBar(screen *ebiten.Image, y, scale float32) {
-	_ = y
-	_ = scale
+func (s *BattleState) drawActionBar(screen *ebiten.Image) {
 	s.actionCmd.Draw(screen)
 }
 
@@ -626,19 +635,26 @@ func (s *BattleState) drawScaledTextColor(screen *ebiten.Image, text string, x, 
 		return
 	}
 
-	// Render text to small image, then scale up
 	textW := len(text)*6 + 4
 	textH := 20
 	if textW <= 0 {
 		return
 	}
-	tmp := ebiten.NewImage(textW, textH)
-	ebitenutil.DebugPrint(tmp, text)
 
+	// Reuse or grow the text buffer to avoid allocating every frame
+	if s.textBuf == nil || s.textBufW < textW {
+		bufW := textW + 128
+		s.textBuf = ebiten.NewImage(bufW, textH)
+		s.textBufW = bufW
+	}
+	s.textBuf.Clear()
+	ebitenutil.DebugPrint(s.textBuf, text)
+
+	sub := s.textBuf.SubImage(image.Rect(0, 0, textW, textH)).(*ebiten.Image)
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Scale(float64(scale), float64(scale))
 	op.GeoM.Translate(float64(x), float64(y))
-	screen.DrawImage(tmp, op)
+	screen.DrawImage(sub, op)
 }
 
 // --- Helpers ---
@@ -683,7 +699,10 @@ func (s *BattleState) prevLivingFoe(current int) int {
 }
 
 func (s *BattleState) calculatePlayerDamage(target *battleFoe, result action.CommandResult) (int, int) {
-	if s.selectedMove == nil || s.selectedMove.ActionCommand != "double_slash" {
+	if s.selectedMove == nil {
+		return 0, 0
+	}
+	if s.selectedMove.ActionCommand != "double_slash" {
 		return battle.CalculateDamage(&s.party.Mario.Stats, s.selectedMove, &target.Stats, result), 1
 	}
 
@@ -748,16 +767,14 @@ func (s *BattleState) applyFlinchAnimation() {
 
 	if s.flinchTarget == -1 {
 		// Player flinch
-		if s.playerNode != nil {
-			pos := s.playerNode.LocalPosition()
-			s.playerNode.SetLocalPosition(pos.X+shake, pos.Y, pos.Z)
+		if s.playerNode != nil && s.playerRig != nil {
+			s.playerNode.SetLocalPositionVec(s.playerRig.basePos.Add(tetra3d.NewVector3(shake, 0, 0)))
 		}
 	} else if s.flinchTarget >= 0 && s.flinchTarget < len(s.foes) {
 		// Enemy flinch
 		foe := s.foes[s.flinchTarget]
 		if foe.Node != nil {
-			pos := foe.Node.LocalPosition()
-			foe.Node.SetLocalPosition(pos.X+shake, pos.Y, pos.Z)
+			foe.Node.SetLocalPositionVec(foe.BasePos.Add(tetra3d.NewVector3(shake, 0, 0)))
 			// Hide defeated foes after flinch ends
 			if s.flinchTimer <= 0 && !foe.Stats.IsAlive() {
 				foe.Node.SetLocalPosition(0, -100, 0)
@@ -786,11 +803,9 @@ func (s *BattleState) applyBiteAnimation() {
 	}
 
 	// Lunge toward player (left side of screen = negative X)
-	count := len(s.foes)
-	spacing := float32(2.0)
-	baseX := float32(3.0) + float32(s.windupFoeIdx-count/2)*spacing
-	lungeX := baseX - progress*1.5 // Move 1.5 units toward player
-	foe.Node.SetLocalPosition(lungeX, 0, 0)
+	base := foe.BasePos
+	lungeOffset := tetra3d.NewVector3(-progress*1.5, 0, 0)
+	foe.Node.SetLocalPositionVec(base.Add(lungeOffset))
 }
 
 // resetBiteAnimation returns the wolf to its base position.
@@ -802,10 +817,7 @@ func (s *BattleState) resetBiteAnimation() {
 	if foe.Node == nil {
 		return
 	}
-	count := len(s.foes)
-	spacing := float32(2.0)
-	baseX := float32(3.0) + float32(s.windupFoeIdx-count/2)*spacing
-	foe.Node.SetLocalPosition(baseX, 0, 0)
+	foe.Node.SetLocalPositionVec(foe.BasePos)
 }
 
 func (s *BattleState) capturePlayerRig(playerNode tetra3d.INode) *battlePlayerRig {
@@ -821,12 +833,14 @@ func (s *BattleState) capturePlayerRig(playerNode tetra3d.INode) *battlePlayerRi
 	}
 }
 
-func (s *BattleState) resetPlayerAnimation() {
+func (s *BattleState) resetPlayerAnimation(resetPosition bool) {
 	if s.playerRig == nil || s.playerNode == nil {
 		return
 	}
 
-	s.playerNode.SetLocalPositionVec(s.playerRig.basePos)
+	if resetPosition {
+		s.playerNode.SetLocalPositionVec(s.playerRig.basePos)
+	}
 	if s.playerRig.torsoPivot != nil {
 		s.playerRig.torsoPivot.SetLocalRotation(tetra3d.NewMatrix4())
 	}
@@ -839,7 +853,7 @@ func (s *BattleState) resetPlayerAnimation() {
 }
 
 func (s *BattleState) syncPlayerActionAnimation() {
-	s.resetPlayerAnimation()
+	s.resetPlayerAnimation(true)
 
 	doubleSlash, ok := s.actionCmd.(*action.DoubleSlash)
 	if !ok || s.playerRig == nil || s.playerNode == nil {

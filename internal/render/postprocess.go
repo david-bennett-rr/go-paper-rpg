@@ -48,6 +48,9 @@ func (p *PostProcess) ensureOffscreen(w, h int) *ebiten.Image {
 	if p.offscreen != nil && p.lastW == w && p.lastH == h {
 		return p.offscreen
 	}
+	if p.offscreen != nil {
+		p.offscreen.Deallocate()
+	}
 	p.offscreen = ebiten.NewImage(w, h)
 	p.lastW = w
 	p.lastH = h
