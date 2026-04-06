@@ -4,7 +4,6 @@ import (
 	"image/color"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
 	"github.com/davidbennett/go-paper-rpg/internal/input"
@@ -110,10 +109,6 @@ func (tp *TimedPress) Draw(screen *ebiten.Image) {
 		vector.DrawFilledRect(screen, curX-3, barY-6, 6, barH+12, color.RGBA{R: 255, G: 255, B: 255, A: 255}, false)
 	}
 
-	// "Press A!" label centered above bar
-	label := "Press A!"
-	labelX := int(barX+barW/2) - len(label)*3
-	ebitenutil.DebugPrintAt(screen, label, labelX, int(barY)-22)
 }
 
 func (tp *TimedPress) IsComplete() bool {

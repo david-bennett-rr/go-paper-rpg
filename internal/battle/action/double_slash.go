@@ -4,7 +4,6 @@ import (
 	"image/color"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
 	"github.com/davidbennett/go-paper-rpg/internal/input"
@@ -119,16 +118,9 @@ func (ds *DoubleSlash) Draw(screen *ebiten.Image) {
 		sweetX := barX + sweetPct*barW
 		vector.DrawFilledRect(screen, sweetX-2, barY-4, 4, barH+8, color.RGBA{R: 255, G: 223, B: 92, A: 255}, false)
 
-		labelX := int(windowX + windowW/2 - 3)
-		labelY := int(barY - 18)
+		// Dim completed windows
 		if i < ds.nextBeat {
-			if ds.slashResults[i].Quality == QualityMiss {
-				ebitenutil.DebugPrintAt(screen, "x", labelX, labelY)
-			} else {
-				ebitenutil.DebugPrintAt(screen, "o", labelX, labelY)
-			}
-		} else {
-			ebitenutil.DebugPrintAt(screen, "-", labelX, labelY)
+			vector.DrawFilledRect(screen, windowX, barY, windowW, barH, color.RGBA{R: 0, G: 0, B: 0, A: 60}, false)
 		}
 	}
 

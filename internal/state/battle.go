@@ -24,17 +24,22 @@ import (
 type battlePhase int
 
 const (
-	phasePlayerMenu battlePhase = iota
+	phasePlayerMenu   battlePhase = iota
 	phasePlayerTarget
 	phasePlayerAction
 	phasePlayerResult
-	phaseEnemyAction
+	phaseEnemyWindup  // Wolf lunges, defend bar appears
+	phaseEnemyDefend  // Player can press B to defend
 	phaseEnemyResult
 	phaseVictory
 	phaseDefeat
 )
 
-const resultDisplayFrames = 60
+const (
+	resultDisplayFrames = 60
+	windupFrames        = 30
+	flinchFrames        = 20
+)
 
 // battleFoe is an enemy combatant.
 type battleFoe struct {
@@ -69,9 +74,18 @@ type BattleState struct {
 	targetCursor int
 	selectedMove *rpg.Move
 	actionCmd    action.ActionCommand
+	defendCmd    *action.DefendPress
 	resultTimer  int
 	resultText   string
 	turnFoeIndex int
+	pendingMove  *rpg.Move // enemy move pending defend resolution
+	pendingFoe   *battleFoe
+
+	// Animation state
+	flinchTimer   int  // counts down during flinch
+	flinchTarget  int  // -1 = player, 0+ = foe index
+	windupTimer   int  // counts down during enemy windup/lunge
+	windupFoeIdx  int
 
 	screenW, screenH int
 }
@@ -171,6 +185,12 @@ func (s *BattleState) Enter(prev GameState) {}
 func (s *BattleState) Exit()                {}
 
 func (s *BattleState) Update() error {
+	// Tick flinch animation
+	if s.flinchTimer > 0 {
+		s.flinchTimer--
+		s.applyFlinchAnimation()
+	}
+
 	switch s.phase {
 	case phasePlayerMenu:
 		s.updatePlayerMenu()
@@ -179,11 +199,13 @@ func (s *BattleState) Update() error {
 	case phasePlayerAction:
 		s.updatePlayerAction()
 	case phasePlayerResult:
-		s.updateResult(phaseEnemyAction)
-	case phaseEnemyAction:
-		s.updateEnemyAction()
+		s.updateResult(phaseEnemyWindup)
+	case phaseEnemyWindup:
+		s.updateEnemyWindup()
+	case phaseEnemyDefend:
+		s.updateEnemyDefend()
 	case phaseEnemyResult:
-		s.updateResult(phasePlayerMenu)
+		s.updateResult(s.nextAfterEnemyResult())
 	case phaseVictory, phaseDefeat:
 		s.updateEndPhase()
 	}
@@ -266,12 +288,13 @@ func (s *BattleState) updatePlayerAction() {
 		target.Stats.TakeDamage(dmg)
 
 		s.resultText = s.playerResultText(result, target.Name, dmg, landedHits)
+
+		// Flinch the target enemy
+		s.flinchTarget = s.targetCursor
+		s.flinchTimer = flinchFrames
+
 		if !target.Stats.IsAlive() {
 			s.resultText += " Defeated!"
-			// Hide the 3D model
-			if target.Node != nil {
-				target.Node.SetLocalPosition(0, -100, 0)
-			}
 		}
 		s.resultTimer = resultDisplayFrames
 		s.actionCmd = nil
@@ -287,7 +310,9 @@ func (s *BattleState) updatePlayerAction() {
 	}
 }
 
-func (s *BattleState) updateEnemyAction() {
+// updateEnemyWindup: find next living foe, start windup lunge, then transition to defend.
+func (s *BattleState) updateEnemyWindup() {
+	// Skip dead foes
 	for s.turnFoeIndex < len(s.foes) && !s.foes[s.turnFoeIndex].Stats.IsAlive() {
 		s.turnFoeIndex++
 	}
@@ -305,22 +330,80 @@ func (s *BattleState) updateEnemyAction() {
 		return
 	}
 
-	cmdResult := action.ResultFromQuality(action.QualityNice)
-	dmg := battle.CalculateDamage(&foe.Stats, move, &s.party.Mario.Stats, cmdResult)
-	s.party.Mario.Stats.TakeDamage(dmg)
+	// Store pending attack and start windup animation
+	s.pendingFoe = foe
+	s.pendingMove = move
+	s.windupFoeIdx = s.turnFoeIndex
+	s.windupTimer = windupFrames
 
-	s.resultText = fmt.Sprintf("%s uses %s! %d damage!", foe.Name, move.Name, dmg)
-	s.resultTimer = resultDisplayFrames
+	// Start the defend command for the player
+	cmd := action.NewDefendPress(15, 45, 30)
+	cmd.Start()
+	s.defendCmd = cmd
+	s.phase = phaseEnemyDefend
+}
 
-	if !s.party.Mario.Stats.IsAlive() {
-		s.phase = phaseDefeat
-		s.resultText = "Defeated..."
-		s.resultTimer = resultDisplayFrames * 2
-		return
+// updateEnemyDefend: wolf is lunging, player can press B to defend.
+func (s *BattleState) updateEnemyDefend() {
+	// Tick windup animation (lunge)
+	s.windupTimer--
+	s.applyBiteAnimation()
+
+	// Update defend command
+	s.defendCmd.Update(s.shared.Input)
+
+	if s.defendCmd.IsComplete() {
+		// Calculate damage with defense reduction
+		cmdResult := action.ResultFromQuality(action.QualityNice)
+		baseDmg := battle.CalculateDamage(&s.pendingFoe.Stats, s.pendingMove, &s.party.Mario.Stats, cmdResult)
+
+		defenseResult := s.defendCmd.Result()
+		reducedDmg := int(float64(baseDmg) * defenseResult.BonusMult)
+		if reducedDmg < 0 {
+			reducedDmg = 0
+		}
+		s.party.Mario.Stats.TakeDamage(reducedDmg)
+
+		// Start player flinch
+		s.flinchTarget = -1
+		s.flinchTimer = flinchFrames
+
+		// Build result text
+		if defenseResult.Quality > action.QualityMiss {
+			s.resultText = fmt.Sprintf("%s uses %s! Blocked %s! %d damage!",
+				s.pendingFoe.Name, s.pendingMove.Name, defenseResult.Quality, reducedDmg)
+		} else {
+			s.resultText = fmt.Sprintf("%s uses %s! %d damage!",
+				s.pendingFoe.Name, s.pendingMove.Name, reducedDmg)
+		}
+		s.resultTimer = resultDisplayFrames
+
+		// Reset bite animation
+		s.resetBiteAnimation()
+		s.defendCmd = nil
+
+		if !s.party.Mario.Stats.IsAlive() {
+			s.phase = phaseDefeat
+			s.resultText = "Defeated..."
+			s.resultTimer = resultDisplayFrames * 2
+			return
+		}
+
+		s.turnFoeIndex++
+		s.phase = phaseEnemyResult
 	}
+}
 
-	s.turnFoeIndex++
-	s.phase = phaseEnemyResult
+// nextAfterEnemyResult determines if more foes need to act or if we go back to player.
+func (s *BattleState) nextAfterEnemyResult() battlePhase {
+	// Check if more living foes need to act
+	for i := s.turnFoeIndex; i < len(s.foes); i++ {
+		if s.foes[i].Stats.IsAlive() {
+			return phaseEnemyWindup
+		}
+	}
+	s.turnFoeIndex = 0
+	return phasePlayerMenu
 }
 
 func (s *BattleState) updateResult(nextPhase battlePhase) {
@@ -487,11 +570,19 @@ func (s *BattleState) drawBattleUI(screen *ebiten.Image) {
 			s.drawActionBar(screen, panelY+60*scale, scale)
 		}
 
+	case phaseEnemyWindup:
+		if s.pendingFoe != nil {
+			s.drawScaledText(screen, fmt.Sprintf("%s attacks!", s.pendingFoe.Name), padX, padY+20*scale, scale)
+		}
+
+	case phaseEnemyDefend:
+		s.drawScaledText(screen, "Press B to Defend!", padX, padY, scale)
+		if s.defendCmd != nil {
+			s.defendCmd.Draw(screen)
+		}
+
 	case phasePlayerResult, phaseEnemyResult:
 		s.drawScaledText(screen, s.resultText, padX, padY+20*scale, scale)
-
-	case phaseEnemyAction:
-		s.drawScaledText(screen, "Enemy turn...", padX, padY+20*scale, scale)
 
 	case phaseVictory:
 		s.drawScaledText(screen, "Victory!   Press A to continue.", padX, padY+20*scale, scale)
@@ -635,9 +726,86 @@ func (s *BattleState) playerResultText(result action.CommandResult, targetName s
 
 func (s *BattleState) playerActionPrompt() string {
 	if s.selectedMove != nil && s.selectedMove.ActionCommand == "double_slash" {
-		return "Press A at each slash!"
+		return "Press A to Attack!"
 	}
-	return "Press A at the right moment!"
+	return "Press A to Attack!"
+}
+
+// --- Animations ---
+
+// applyFlinchAnimation shakes the target model left/right.
+func (s *BattleState) applyFlinchAnimation() {
+	shake := float32(0)
+	if s.flinchTimer > 0 {
+		// Oscillate with decreasing amplitude
+		amp := float32(s.flinchTimer) / float32(flinchFrames) * 0.3
+		if s.flinchTimer%4 < 2 {
+			shake = amp
+		} else {
+			shake = -amp
+		}
+	}
+
+	if s.flinchTarget == -1 {
+		// Player flinch
+		if s.playerNode != nil {
+			pos := s.playerNode.LocalPosition()
+			s.playerNode.SetLocalPosition(pos.X+shake, pos.Y, pos.Z)
+		}
+	} else if s.flinchTarget >= 0 && s.flinchTarget < len(s.foes) {
+		// Enemy flinch
+		foe := s.foes[s.flinchTarget]
+		if foe.Node != nil {
+			pos := foe.Node.LocalPosition()
+			foe.Node.SetLocalPosition(pos.X+shake, pos.Y, pos.Z)
+			// Hide defeated foes after flinch ends
+			if s.flinchTimer <= 0 && !foe.Stats.IsAlive() {
+				foe.Node.SetLocalPosition(0, -100, 0)
+			}
+		}
+	}
+}
+
+// applyBiteAnimation lunges the attacking wolf toward the player.
+func (s *BattleState) applyBiteAnimation() {
+	if s.windupFoeIdx < 0 || s.windupFoeIdx >= len(s.foes) {
+		return
+	}
+	foe := s.foes[s.windupFoeIdx]
+	if foe.Node == nil {
+		return
+	}
+
+	// Calculate lunge progress (0 to 1 as windup counts down)
+	progress := 1.0 - float32(s.windupTimer)/float32(windupFrames)
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 1 {
+		progress = 1
+	}
+
+	// Lunge toward player (left side of screen = negative X)
+	count := len(s.foes)
+	spacing := float32(2.0)
+	baseX := float32(3.0) + float32(s.windupFoeIdx-count/2)*spacing
+	lungeX := baseX - progress*1.5 // Move 1.5 units toward player
+	foe.Node.SetLocalPosition(lungeX, 0, 0)
+}
+
+// resetBiteAnimation returns the wolf to its base position.
+func (s *BattleState) resetBiteAnimation() {
+	if s.windupFoeIdx < 0 || s.windupFoeIdx >= len(s.foes) {
+		return
+	}
+	foe := s.foes[s.windupFoeIdx]
+	if foe.Node == nil {
+		return
+	}
+	count := len(s.foes)
+	spacing := float32(2.0)
+	baseX := float32(3.0) + float32(s.windupFoeIdx-count/2)*spacing
+	foe.Node.SetLocalPosition(baseX, 0, 0)
 }
 
 func (s *BattleState) capturePlayerRig(playerNode tetra3d.INode) *battlePlayerRig {
