@@ -19,6 +19,7 @@ type Player struct {
 	X, Y, Z float64
 	Yaw     float64
 	Root    tetra3d.INode
+	Shadow  tetra3d.INode
 }
 
 func NewPlayer(root tetra3d.INode) *Player {
@@ -55,11 +56,13 @@ func (p *Player) SetPlacement(x, y, z, yaw float64) {
 }
 
 func (p *Player) syncModel() {
-	if p.Root == nil {
-		return
+	if p.Root != nil {
+		p.Root.SetLocalPositionVec(tetra3d.NewVector3(float32(p.X), float32(p.Y), float32(p.Z)))
+		p.Root.SetLocalRotation(tetra3d.NewMatrix4Rotate(0, 1, 0, float32(p.Yaw)))
 	}
-	p.Root.SetLocalPositionVec(tetra3d.NewVector3(float32(p.X), float32(p.Y), float32(p.Z)))
-	p.Root.SetLocalRotation(tetra3d.NewMatrix4Rotate(0, 1, 0, float32(p.Yaw)))
+	if p.Shadow != nil {
+		p.Shadow.SetLocalPositionVec(tetra3d.NewVector3(float32(p.X), 0.02, float32(p.Z)))
+	}
 }
 
 func (p *Player) faceMovement(dx, dz float64) {

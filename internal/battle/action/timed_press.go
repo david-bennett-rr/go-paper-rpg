@@ -4,6 +4,7 @@ import (
 	"image/color"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
 	"github.com/davidbennett/go-paper-rpg/internal/input"
@@ -72,37 +73,47 @@ func (tp *TimedPress) Draw(screen *ebiten.Image) {
 		return
 	}
 
-	// Draw a timing bar indicator
-	barX := float32(160)
-	barY := float32(200)
-	barW := float32(160)
-	barH := float32(12)
+	screenW := float32(screen.Bounds().Dx())
+	screenH := float32(screen.Bounds().Dy())
+
+	barW := screenW * 0.4
+	if barW < 300 {
+		barW = 300
+	}
+	barH := float32(20)
+	barX := (screenW - barW) / 2
+	barY := screenH/2 - barH/2
 
 	// Background bar
-	vector.DrawFilledRect(screen, barX, barY, barW, barH, color.RGBA{R: 40, G: 40, B: 40, A: 200}, true)
+	vector.DrawFilledRect(screen, barX-4, barY-4, barW+8, barH+8, color.RGBA{R: 20, G: 22, B: 30, A: 220}, false)
+	vector.DrawFilledRect(screen, barX, barY, barW, barH, color.RGBA{R: 40, G: 40, B: 50, A: 230}, false)
+	vector.StrokeRect(screen, barX, barY, barW, barH, 2, color.RGBA{R: 70, G: 72, B: 90, A: 255}, false)
 
-	// Window zone (green area)
 	if tp.windowEnd > 0 {
-		totalDuration := float32(tp.windowEnd + 10) // Total animation length estimate
+		totalDuration := float32(tp.windowEnd + 12)
+
+		// Window zone (green area)
 		winStartPct := float32(tp.windowStart) / totalDuration
 		winEndPct := float32(tp.windowEnd) / totalDuration
 		winX := barX + winStartPct*barW
 		winW := (winEndPct - winStartPct) * barW
-		vector.DrawFilledRect(screen, winX, barY, winW, barH, color.RGBA{R: 50, G: 180, B: 50, A: 200}, true)
+		vector.DrawFilledRect(screen, winX, barY, winW, barH, color.RGBA{R: 50, G: 160, B: 60, A: 220}, false)
 
 		// Sweet spot marker (bright yellow line)
 		sweetPct := float32(tp.sweetSpot) / totalDuration
 		sweetX := barX + sweetPct*barW
-		vector.DrawFilledRect(screen, sweetX-1, barY, 2, barH, color.RGBA{R: 255, G: 255, B: 0, A: 255}, true)
-	}
+		vector.DrawFilledRect(screen, sweetX-2, barY-4, 4, barH+8, color.RGBA{R: 255, G: 220, B: 60, A: 255}, false)
 
-	// Current position cursor (white)
-	if tp.windowEnd > 0 {
-		totalDuration := float32(tp.windowEnd + 10)
+		// Current position cursor (white)
 		curPct := float32(tp.currentTick) / totalDuration
 		curX := barX + curPct*barW
-		vector.DrawFilledRect(screen, curX-2, barY-2, 4, barH+4, color.RGBA{R: 255, G: 255, B: 255, A: 255}, true)
+		vector.DrawFilledRect(screen, curX-3, barY-6, 6, barH+12, color.RGBA{R: 255, G: 255, B: 255, A: 255}, false)
 	}
+
+	// "Press A!" label centered above bar
+	label := "Press A!"
+	labelX := int(barX+barW/2) - len(label)*3
+	ebitenutil.DebugPrintAt(screen, label, labelX, int(barY)-22)
 }
 
 func (tp *TimedPress) IsComplete() bool {

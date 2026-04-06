@@ -2,9 +2,12 @@ package world
 
 import (
 	"fmt"
+	"image"
 	"image/color"
 	"math"
+	"sync"
 
+	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/solarlune/tetra3d"
 )
 
@@ -13,6 +16,11 @@ type PrefabCategory string
 const (
 	PrefabCategoryProp  PrefabCategory = "prop"
 	PrefabCategoryEnemy PrefabCategory = "enemy"
+
+	pineTreeScale  = 1.22
+	roundTreeScale = 1.18
+	playerScale    = 0.88
+	wolfScale      = 0.90
 )
 
 type PrefabInfo struct {
@@ -25,27 +33,35 @@ type PrefabInfo struct {
 }
 
 var prefabInfos = []PrefabInfo{
-	{ID: "tree_pine", Name: "Pine Tree", Category: PrefabCategoryProp, Icon: "P", Color: color.RGBA{R: 46, G: 112, B: 45, A: 255}, Radius: 0.7},
-	{ID: "tree_round", Name: "Round Tree", Category: PrefabCategoryProp, Icon: "T", Color: color.RGBA{R: 72, G: 144, B: 62, A: 255}, Radius: 0.75},
-	{ID: "rock", Name: "Rock", Category: PrefabCategoryProp, Icon: "R", Color: color.RGBA{R: 115, G: 117, B: 126, A: 255}, Radius: 0.45},
-	{ID: "wolf", Name: "Wolf", Category: PrefabCategoryEnemy, Icon: "W", Color: color.RGBA{R: 144, G: 149, B: 160, A: 255}, Radius: 0.55},
+	{ID: "tree_pine", Name: "Pine Tree", Category: PrefabCategoryProp, Icon: "P", Color: color.RGBA{R: 46, G: 112, B: 45, A: 255}, Radius: 0.85},
+	{ID: "tree_round", Name: "Round Tree", Category: PrefabCategoryProp, Icon: "T", Color: color.RGBA{R: 72, G: 144, B: 62, A: 255}, Radius: 0.88},
+	{ID: "rock", Name: "Rock", Category: PrefabCategoryProp, Icon: "R", Color: color.RGBA{R: 115, G: 117, B: 126, A: 255}, Radius: 0.7},
+	{ID: "wolf", Name: "Wolf", Category: PrefabCategoryEnemy, Icon: "W", Color: color.RGBA{R: 144, G: 149, B: 160, A: 255}, Radius: 0.50},
 }
 
+var (
+	blobShadowTextureOnce sync.Once
+	blobShadowTexture     *ebiten.Image
+)
+
 type scenePalette struct {
-	grass      *tetra3d.Material
-	dirt       *tetra3d.Material
-	bark       *tetra3d.Material
-	leaves     *tetra3d.Material
-	leavesAlt  *tetra3d.Material
-	stone      *tetra3d.Material
-	wall       *tetra3d.Material
-	playerCoat *tetra3d.Material
-	playerSkin *tetra3d.Material
-	playerHat  *tetra3d.Material
-	playerBoot *tetra3d.Material
-	wolfFur    *tetra3d.Material
-	wolfDark   *tetra3d.Material
-	eyes       *tetra3d.Material
+	grass            *tetra3d.Material
+	dirt             *tetra3d.Material
+	bark             *tetra3d.Material
+	leaves           *tetra3d.Material
+	leavesAlt        *tetra3d.Material
+	stone            *tetra3d.Material
+	wall             *tetra3d.Material
+	shadow           *tetra3d.Material
+	playerCoat       *tetra3d.Material
+	playerSkin       *tetra3d.Material
+	playerHat        *tetra3d.Material
+	playerBoot       *tetra3d.Material
+	playerSwordMetal *tetra3d.Material
+	playerSwordGrip  *tetra3d.Material
+	wolfFur          *tetra3d.Material
+	wolfDark         *tetra3d.Material
+	eyes             *tetra3d.Material
 }
 
 func PropPrefabInfos() []PrefabInfo {
@@ -111,20 +127,23 @@ func buildPrefab(id string, palette scenePalette) (tetra3d.INode, error) {
 
 func newScenePalette() scenePalette {
 	return scenePalette{
-		grass:      newMaterial("Grass", 0.29, 0.52, 0.23),
-		dirt:       newMaterial("Dirt", 0.45, 0.34, 0.20),
-		bark:       newMaterial("Bark", 0.38, 0.24, 0.13),
-		leaves:     newMaterial("Leaves", 0.20, 0.43, 0.18),
-		leavesAlt:  newMaterial("LeavesAlt", 0.28, 0.52, 0.20),
-		stone:      newMaterial("Stone", 0.48, 0.50, 0.56),
-		wall:       newMaterial("Wall", 0.62, 0.55, 0.42),
-		playerCoat: newMaterial("PlayerCoat", 0.16, 0.27, 0.66),
-		playerSkin: newMaterial("PlayerSkin", 0.88, 0.74, 0.60),
-		playerHat:  newMaterial("PlayerHat", 0.70, 0.18, 0.14),
-		playerBoot: newMaterial("PlayerBoot", 0.20, 0.12, 0.08),
-		wolfFur:    newMaterial("WolfFur", 0.48, 0.50, 0.54),
-		wolfDark:   newMaterial("WolfDark", 0.25, 0.27, 0.31),
-		eyes:       newMaterial("Eyes", 0.08, 0.08, 0.10),
+		grass:            newMaterial("Grass", 0.29, 0.52, 0.23),
+		dirt:             newMaterial("Dirt", 0.45, 0.34, 0.20),
+		bark:             newMaterial("Bark", 0.38, 0.24, 0.13),
+		leaves:           newMaterial("Leaves", 0.20, 0.43, 0.18),
+		leavesAlt:        newMaterial("LeavesAlt", 0.28, 0.52, 0.20),
+		stone:            newMaterial("Stone", 0.48, 0.50, 0.56),
+		wall:             newMaterial("Wall", 0.62, 0.55, 0.42),
+		shadow:           newShadowMaterial(),
+		playerCoat:       newMaterial("PlayerCoat", 0.16, 0.27, 0.66),
+		playerSkin:       newMaterial("PlayerSkin", 0.88, 0.74, 0.60),
+		playerHat:        newMaterial("PlayerHat", 0.70, 0.18, 0.14),
+		playerBoot:       newMaterial("PlayerBoot", 0.20, 0.12, 0.08),
+		playerSwordMetal: newMaterial("PlayerSwordMetal", 0.78, 0.82, 0.88),
+		playerSwordGrip:  newMaterial("PlayerSwordGrip", 0.40, 0.26, 0.12),
+		wolfFur:          newMaterial("WolfFur", 0.48, 0.50, 0.54),
+		wolfDark:         newMaterial("WolfDark", 0.25, 0.27, 0.31),
+		eyes:             newMaterial("Eyes", 0.08, 0.08, 0.10),
 	}
 }
 
@@ -139,6 +158,7 @@ func buildPineTreePrefab(palette scenePalette) tetra3d.INode {
 		newPrimitiveModel("CanopyMid", foliageMesh, palette.leaves, v3(0, 2.25, 0), v3(0.72, 0.62, 0.72)),
 		newPrimitiveModel("CanopyTop", foliageMesh, palette.leavesAlt, v3(0, 2.75, 0), v3(0.46, 0.42, 0.46)),
 	)
+	root.SetLocalScaleVec(v3(pineTreeScale, pineTreeScale, pineTreeScale))
 	return root
 }
 
@@ -152,6 +172,7 @@ func buildRoundTreePrefab(palette scenePalette) tetra3d.INode {
 		newPrimitiveModel("CanopyBase", foliageMesh, palette.leavesAlt, v3(0, 1.55, 0), v3(0.55, 0.48, 0.55)),
 		newPrimitiveModel("CanopyTop", foliageMesh, palette.leaves, v3(0, 2.05, 0), v3(0.42, 0.38, 0.42)),
 	)
+	root.SetLocalScaleVec(v3(roundTreeScale, roundTreeScale, roundTreeScale))
 	return root
 }
 
@@ -178,13 +199,45 @@ func buildPlayerPrefab(palette scenePalette) tetra3d.INode {
 		newPrimitiveModel("RightBoot", cubeMesh, palette.playerBoot, v3(0.13, 0.08, 0.02), v3(0.13, 0.10, 0.18)),
 		newPrimitiveModel("LeftLeg", cubeMesh, palette.playerCoat, v3(-0.13, 0.34, 0), v3(0.10, 0.28, 0.10)),
 		newPrimitiveModel("RightLeg", cubeMesh, palette.playerCoat, v3(0.13, 0.34, 0), v3(0.10, 0.28, 0.10)),
-		newPrimitiveModel("Torso", cubeMesh, palette.playerCoat, v3(0, 0.92, 0), v3(0.34, 0.48, 0.24)),
-		newPrimitiveModel("LeftArm", cubeMesh, palette.playerSkin, v3(-0.29, 0.94, 0), v3(0.08, 0.30, 0.08)),
-		newPrimitiveModel("RightArm", cubeMesh, palette.playerSkin, v3(0.29, 0.94, 0), v3(0.08, 0.30, 0.08)),
-		newPrimitiveModel("Head", headMesh, palette.playerSkin, v3(0, 1.56, 0.02), v3(0.19, 0.22, 0.19)),
-		newPrimitiveModel("Nose", cubeMesh, palette.playerSkin, v3(0, 1.50, 0.19), v3(0.04, 0.04, 0.05)),
-		newPrimitiveModel("Hat", hatMesh, palette.playerHat, v3(0, 1.90, 0.02), v3(0.23, 0.16, 0.23)),
 	)
+
+	torsoPivot := tetra3d.NewNode("TorsoPivot")
+	torsoPivot.SetLocalPosition(0, 0.62, 0)
+	root.AddChildren(torsoPivot)
+	torsoPivot.AddChildren(
+		newPrimitiveModel("Torso", cubeMesh, palette.playerCoat, v3(0, 0.30, 0), v3(0.34, 0.48, 0.24)),
+		newPrimitiveModel("Head", headMesh, palette.playerSkin, v3(0, 0.94, 0.02), v3(0.19, 0.22, 0.19)),
+		newPrimitiveModel("Nose", cubeMesh, palette.playerSkin, v3(0, 0.88, 0.19), v3(0.04, 0.04, 0.05)),
+		newPrimitiveModel("Hat", hatMesh, palette.playerHat, v3(0, 1.28, 0.02), v3(0.23, 0.16, 0.23)),
+	)
+
+	leftArmPivot := tetra3d.NewNode("LeftArmPivot")
+	leftArmPivot.SetLocalPosition(-0.29, 0.56, 0)
+	leftArmPivot.AddChildren(
+		newPrimitiveModel("LeftArm", cubeMesh, palette.playerSkin, v3(0, -0.18, 0), v3(0.08, 0.24, 0.08)),
+		newPrimitiveModel("LeftHand", cubeMesh, palette.playerSkin, v3(0, -0.45, 0.02), v3(0.07, 0.06, 0.08)),
+	)
+
+	rightArmPivot := tetra3d.NewNode("RightArmPivot")
+	rightArmPivot.SetLocalPosition(0.29, 0.56, 0)
+	rightArmPivot.AddChildren(
+		newPrimitiveModel("RightArm", cubeMesh, palette.playerSkin, v3(0, -0.18, 0), v3(0.08, 0.24, 0.08)),
+		newPrimitiveModel("RightHand", cubeMesh, palette.playerSkin, v3(0, -0.45, 0.02), v3(0.07, 0.06, 0.08)),
+	)
+
+	swordPivot := tetra3d.NewNode("SwordPivot")
+	swordPivot.SetLocalPosition(0.05, -0.44, 0.08)
+	swordPivot.AddChildren(
+		newPrimitiveModel("SwordPommel", cubeMesh, palette.playerSwordMetal, v3(0, 0.02, 0), v3(0.04, 0.03, 0.04)),
+		newPrimitiveModel("SwordGrip", cubeMesh, palette.playerSwordGrip, v3(0, -0.10, 0), v3(0.03, 0.10, 0.03)),
+		newPrimitiveModel("SwordGuard", cubeMesh, palette.playerSwordGrip, v3(0, -0.18, 0), v3(0.12, 0.02, 0.03)),
+		newPrimitiveModel("SwordBlade", cubeMesh, palette.playerSwordMetal, v3(0, -0.46, 0), v3(0.04, 0.24, 0.02)),
+		newPrimitiveModel("SwordTip", hatMesh, palette.playerSwordMetal, v3(0, -0.73, 0), v3(0.05, 0.06, 0.03)),
+	)
+	rightArmPivot.AddChildren(swordPivot)
+
+	torsoPivot.AddChildren(leftArmPivot, rightArmPivot)
+	root.SetLocalScaleVec(v3(playerScale, playerScale, playerScale))
 
 	return root
 }
@@ -215,6 +268,7 @@ func buildWolfPrefab(palette scenePalette) tetra3d.INode {
 	leftEar := newPrimitiveModel("LeftEar", tailMesh, palette.wolfDark, v3(-0.10, 0.82, 0.72), v3(0.06, 0.10, 0.06))
 	rightEar := newPrimitiveModel("RightEar", tailMesh, palette.wolfDark, v3(0.10, 0.82, 0.72), v3(0.06, 0.10, 0.06))
 	root.AddChildren(leftEar, rightEar)
+	root.SetLocalScaleVec(v3(wolfScale, wolfScale, wolfScale))
 
 	return root
 }
@@ -247,6 +301,95 @@ func newMaterial(name string, r, g, b float32) *tetra3d.Material {
 	mat := tetra3d.NewMaterial(name)
 	mat.Color = tetra3d.NewColor(r, g, b, 1)
 	return mat
+}
+
+func newShadowMaterial() *tetra3d.Material {
+	mat := tetra3d.NewMaterial("Shadow")
+	mat.Color = tetra3d.NewColor(0, 0, 0, 0.35)
+	mat.Texture = sharedBlobShadowTexture()
+	mat.Shadeless = true
+	mat.TransparencyMode = tetra3d.TransparencyModeTransparent
+	mat.TextureFilterMode = ebiten.FilterLinear
+	mat.BackfaceCulling = false
+	return mat
+}
+
+// NewBlobShadow creates a flat dark disc at ground level.
+// scaleX/scaleZ control the shadow footprint size.
+func NewBlobShadow(name string, scaleX, scaleZ float32, palette scenePalette) *tetra3d.Model {
+	shadow := tetra3d.NewModel(name, newShadowQuadMesh())
+	for _, mp := range shadow.Mesh.MeshParts {
+		mp.Material = palette.shadow
+	}
+	shadow.SetLocalPositionVec(v3(0, 0.02, 0))
+	shadow.SetLocalScaleVec(v3(scaleX, 1, scaleZ))
+	return shadow
+}
+
+func sharedBlobShadowTexture() *ebiten.Image {
+	blobShadowTextureOnce.Do(func() {
+		blobShadowTexture = buildBlobShadowTexture(96)
+	})
+	return blobShadowTexture
+}
+
+func buildBlobShadowTexture(size int) *ebiten.Image {
+	img := image.NewNRGBA(image.Rect(0, 0, size, size))
+	center := float64(size-1) * 0.5
+	outerRadius := center
+	innerRadius := outerRadius * 0.15
+
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			dx := (float64(x) - center) / outerRadius
+			dy := (float64(y) - center) / outerRadius
+			dist := math.Sqrt(dx*dx + dy*dy)
+
+			alpha := 0.0
+			switch {
+			case dist <= innerRadius/outerRadius:
+				alpha = 1
+			case dist < 1:
+				t := (dist - innerRadius/outerRadius) / (1 - innerRadius/outerRadius)
+				alpha = 1 - smoothstep(t)
+			default:
+				alpha = 0
+			}
+
+			img.SetNRGBA(x, y, color.NRGBA{
+				R: 255,
+				G: 255,
+				B: 255,
+				A: uint8(alpha * 255),
+			})
+		}
+	}
+
+	return ebiten.NewImageFromImage(img)
+}
+
+func newShadowQuadMesh() *tetra3d.Mesh {
+	mesh := tetra3d.NewMesh(
+		"ShadowQuad",
+		tetra3d.NewVertex(-0.5, 0, -0.5, 0, 0),
+		tetra3d.NewVertex(0.5, 0, -0.5, 1, 0),
+		tetra3d.NewVertex(0.5, 0, 0.5, 1, 1),
+		tetra3d.NewVertex(-0.5, 0, 0.5, 0, 1),
+	)
+	mesh.AddMeshPart(tetra3d.NewMaterial("ShadowQuad"), 0, 1, 2, 0, 2, 3)
+	mesh.UpdateBounds()
+	mesh.AutoNormal()
+	return mesh
+}
+
+func smoothstep(t float64) float64 {
+	if t <= 0 {
+		return 0
+	}
+	if t >= 1 {
+		return 1
+	}
+	return t * t * (3 - 2*t)
 }
 
 func v3(x, y, z float32) tetra3d.Vector3 {

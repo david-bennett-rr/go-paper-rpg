@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
@@ -24,7 +24,7 @@ import (
 type battlePhase int
 
 const (
-	phasePlayerMenu   battlePhase = iota
+	phasePlayerMenu battlePhase = iota
 	phasePlayerTarget
 	phasePlayerAction
 	phasePlayerResult
@@ -46,6 +46,13 @@ type battleFoe struct {
 	Node   tetra3d.INode // 3D model in battle scene
 }
 
+type battlePlayerRig struct {
+	basePos       tetra3d.Vector3
+	torsoPivot    tetra3d.INode
+	leftArmPivot  tetra3d.INode
+	rightArmPivot tetra3d.INode
+}
+
 // BattleState manages a full turn-based battle encounter.
 type BattleState struct {
 	shared   *SharedContext
@@ -55,6 +62,7 @@ type BattleState struct {
 
 	scene      *tetra3d.Scene
 	playerNode tetra3d.INode
+	playerRig  *battlePlayerRig
 
 	phase        battlePhase
 	menuCursor   int
@@ -134,6 +142,7 @@ func (s *BattleState) buildBattleScene() {
 	playerNode.SetLocalRotation(tetra3d.NewMatrix4Rotate(0, 1, 0, math.Pi/6))
 	scene.Root.AddChildren(playerNode)
 	s.playerNode = playerNode
+	s.playerRig = s.capturePlayerRig(playerNode)
 
 	// Enemy models on right side
 	count := len(s.foes)
@@ -159,7 +168,7 @@ func (s *BattleState) buildBattleScene() {
 }
 
 func (s *BattleState) Enter(prev GameState) {}
-func (s *BattleState) Exit()               {}
+func (s *BattleState) Exit()                {}
 
 func (s *BattleState) Update() error {
 	switch s.phase {
@@ -177,6 +186,10 @@ func (s *BattleState) Update() error {
 		s.updateResult(phasePlayerMenu)
 	case phaseVictory, phaseDefeat:
 		s.updateEndPhase()
+	}
+
+	if s.phase != phasePlayerAction {
+		s.resetPlayerAnimation()
 	}
 
 	return nil
@@ -230,7 +243,13 @@ func (s *BattleState) updatePlayerTarget() {
 }
 
 func (s *BattleState) startActionCommand() {
-	cmd := action.NewTimedPress(20, 50, 35)
+	var cmd action.ActionCommand
+	switch s.selectedMove.ActionCommand {
+	case "double_slash":
+		cmd = action.NewDoubleSlash()
+	default:
+		cmd = action.NewTimedPress(30, 80, 55)
+	}
 	cmd.Start()
 	s.actionCmd = cmd
 	s.phase = phasePlayerAction
@@ -238,14 +257,15 @@ func (s *BattleState) startActionCommand() {
 
 func (s *BattleState) updatePlayerAction() {
 	s.actionCmd.Update(s.shared.Input)
+	s.syncPlayerActionAnimation()
 
 	if s.actionCmd.IsComplete() {
 		result := s.actionCmd.Result()
 		target := s.foes[s.targetCursor]
-		dmg := battle.CalculateDamage(&s.party.Mario.Stats, s.selectedMove, &target.Stats, result)
+		dmg, landedHits := s.calculatePlayerDamage(target, result)
 		target.Stats.TakeDamage(dmg)
 
-		s.resultText = fmt.Sprintf("%s! %d damage to %s!", result.Quality, dmg, target.Name)
+		s.resultText = s.playerResultText(result, target.Name, dmg, landedHits)
 		if !target.Stats.IsAlive() {
 			s.resultText += " Defeated!"
 			// Hide the 3D model
@@ -347,7 +367,7 @@ func (s *BattleState) pickEnemyMove(foe *battleFoe) *rpg.Move {
 		return foe.Moves[0]
 	}
 
-	roll := rand.Intn(totalWeight)
+	roll := rand.IntN(totalWeight)
 	for _, c := range candidates {
 		roll -= c.weight
 		if roll < 0 {
@@ -390,13 +410,13 @@ func (s *BattleState) drawBattleUI(screen *ebiten.Image) {
 	h := float32(s.screenH)
 
 	// Scale factor for UI - target readable at 1080p+
-	scale := h / 720.0
+	scale := h / 540.0
 	if scale < 1 {
 		scale = 1
 	}
 
 	// --- Top bar: party HP ---
-	topBarH := 70 * scale
+	topBarH := 80 * scale
 	vector.DrawFilledRect(screen, 0, 0, w, topBarH, color.RGBA{R: 15, G: 15, B: 25, A: 210}, false)
 	vector.StrokeLine(screen, 0, topBarH, w, topBarH, 2, color.RGBA{R: 50, G: 55, B: 80, A: 255}, false)
 
@@ -407,7 +427,7 @@ func (s *BattleState) drawBattleUI(screen *ebiten.Image) {
 	s.drawScaledText(screen, mario.Name, nameX, nameY, scale)
 	hpText := fmt.Sprintf("HP  %d / %d", mario.Stats.HP, mario.Stats.MaxHP)
 	s.drawScaledText(screen, hpText, nameX, nameY+22*scale, scale)
-	s.drawHPBar(screen, nameX, nameY+44*scale, 180*scale, 12*scale, mario.Stats.HP, mario.Stats.MaxHP)
+	s.drawHPBar(screen, nameX, nameY+44*scale, 200*scale, 14*scale, mario.Stats.HP, mario.Stats.MaxHP)
 
 	fpText := fmt.Sprintf("FP  %d / %d", mario.Stats.FP, mario.Stats.MaxFP)
 	s.drawScaledText(screen, fpText, nameX+220*scale, nameY+22*scale, scale)
@@ -428,18 +448,18 @@ func (s *BattleState) drawBattleUI(screen *ebiten.Image) {
 		s.drawScaledTextColor(screen, foe.Name, foeX, nameY, scale, foeNameClr)
 		foeHP := fmt.Sprintf("HP  %d / %d", foe.Stats.HP, foe.Stats.MaxHP)
 		s.drawScaledText(screen, foeHP, foeX, nameY+22*scale, scale)
-		s.drawHPBar(screen, foeX, nameY+44*scale, 180*scale, 12*scale, foe.Stats.HP, foe.Stats.MaxHP)
+		s.drawHPBar(screen, foeX, nameY+44*scale, 200*scale, 14*scale, foe.Stats.HP, foe.Stats.MaxHP)
 	}
 
 	// --- Bottom panel ---
-	panelH := 140 * scale
+	panelH := 170 * scale
 	panelY := h - panelH
 	vector.DrawFilledRect(screen, 0, panelY, w, panelH, color.RGBA{R: 15, G: 15, B: 25, A: 225}, false)
 	vector.StrokeLine(screen, 0, panelY, w, panelY, 2, color.RGBA{R: 50, G: 55, B: 80, A: 255}, false)
 
-	padX := 32 * scale
-	padY := panelY + 18*scale
-	lineH := 30 * scale
+	padX := 36 * scale
+	padY := panelY + 20*scale
+	lineH := 36 * scale
 
 	switch s.phase {
 	case phasePlayerMenu:
@@ -449,7 +469,7 @@ func (s *BattleState) drawBattleUI(screen *ebiten.Image) {
 			prefix := "   "
 			if i == s.menuCursor {
 				prefix = " > "
-				vector.DrawFilledRect(screen, padX-4*scale, y-4*scale, 280*scale, lineH, color.RGBA{R: 40, G: 50, B: 80, A: 200}, false)
+				vector.DrawFilledRect(screen, padX-4*scale, y-4*scale, 320*scale, lineH, color.RGBA{R: 40, G: 50, B: 80, A: 200}, false)
 			}
 			fpLabel := ""
 			if move.FPCost > 0 {
@@ -462,7 +482,7 @@ func (s *BattleState) drawBattleUI(screen *ebiten.Image) {
 		s.drawScaledText(screen, "Select a target       A: Confirm   B: Back", padX, padY, scale)
 
 	case phasePlayerAction:
-		s.drawScaledText(screen, "Press A at the right moment!", padX, padY, scale)
+		s.drawScaledText(screen, s.playerActionPrompt(), padX, padY, scale)
 		if s.actionCmd != nil {
 			s.drawActionBar(screen, panelY+60*scale, scale)
 		}
@@ -482,20 +502,8 @@ func (s *BattleState) drawBattleUI(screen *ebiten.Image) {
 }
 
 func (s *BattleState) drawActionBar(screen *ebiten.Image, y, scale float32) {
-	// Draw a larger, centered timing bar
-	barW := 400 * scale
-	barH := 24 * scale
-	barX := (float32(s.screenW) - barW) / 2
-
-	// Background
-	vector.DrawFilledRect(screen, barX, y, barW, barH, color.RGBA{R: 30, G: 30, B: 40, A: 230}, false)
-	vector.StrokeRect(screen, barX, y, barW, barH, 2, color.RGBA{R: 70, G: 70, B: 90, A: 255}, false)
-
-	// Let the action command draw itself too (it draws at hardcoded coords,
-	// so we also draw our own scaled version)
-	// We read the timed press state from the action command interface.
-	// For now, just call its Draw which renders at a small size,
-	// and we overlay our own bar.
+	_ = y
+	_ = scale
 	s.actionCmd.Draw(screen)
 }
 
@@ -581,4 +589,170 @@ func (s *BattleState) prevLivingFoe(current int) int {
 		}
 	}
 	return current
+}
+
+func (s *BattleState) calculatePlayerDamage(target *battleFoe, result action.CommandResult) (int, int) {
+	if s.selectedMove == nil || s.selectedMove.ActionCommand != "double_slash" {
+		return battle.CalculateDamage(&s.party.Mario.Stats, s.selectedMove, &target.Stats, result), 1
+	}
+
+	doubleSlash, ok := s.actionCmd.(*action.DoubleSlash)
+	if !ok {
+		return battle.CalculateDamage(&s.party.Mario.Stats, s.selectedMove, &target.Stats, result), 1
+	}
+
+	totalDamage := 0
+	landedHits := 0
+	for _, slash := range doubleSlash.SlashResults() {
+		if slash.Quality == action.QualityMiss {
+			continue
+		}
+		totalDamage += battle.CalculateDamage(&s.party.Mario.Stats, s.selectedMove, &target.Stats, slash)
+		landedHits++
+	}
+
+	return totalDamage, landedHits
+}
+
+func (s *BattleState) playerResultText(result action.CommandResult, targetName string, damage, landedHits int) string {
+	if s.selectedMove != nil && s.selectedMove.ActionCommand == "double_slash" {
+		switch landedHits {
+		case 0:
+			return fmt.Sprintf("%s Neu whiffs both slashes!", result.Quality)
+		case 1:
+			return fmt.Sprintf("%s Neu lands 1 slash on %s for %d damage!", result.Quality, targetName, damage)
+		default:
+			return fmt.Sprintf("%s Neu lands %d slashes on %s for %d damage!", result.Quality, landedHits, targetName, damage)
+		}
+	}
+
+	bonus := ""
+	if result.BonusMult > 1.0 {
+		bonus = fmt.Sprintf(" (%.0fx bonus!)", result.BonusMult)
+	}
+	return fmt.Sprintf("%s! %d damage to %s!%s", result.Quality, damage, targetName, bonus)
+}
+
+func (s *BattleState) playerActionPrompt() string {
+	if s.selectedMove != nil && s.selectedMove.ActionCommand == "double_slash" {
+		return "Press A at each slash!"
+	}
+	return "Press A at the right moment!"
+}
+
+func (s *BattleState) capturePlayerRig(playerNode tetra3d.INode) *battlePlayerRig {
+	if playerNode == nil {
+		return nil
+	}
+
+	return &battlePlayerRig{
+		basePos:       playerNode.LocalPosition(),
+		torsoPivot:    playerNode.Root().FindNode("TorsoPivot"),
+		leftArmPivot:  playerNode.Root().FindNode("LeftArmPivot"),
+		rightArmPivot: playerNode.Root().FindNode("RightArmPivot"),
+	}
+}
+
+func (s *BattleState) resetPlayerAnimation() {
+	if s.playerRig == nil || s.playerNode == nil {
+		return
+	}
+
+	s.playerNode.SetLocalPositionVec(s.playerRig.basePos)
+	if s.playerRig.torsoPivot != nil {
+		s.playerRig.torsoPivot.SetLocalRotation(tetra3d.NewMatrix4())
+	}
+	if s.playerRig.leftArmPivot != nil {
+		s.playerRig.leftArmPivot.SetLocalRotation(tetra3d.NewMatrix4())
+	}
+	if s.playerRig.rightArmPivot != nil {
+		s.playerRig.rightArmPivot.SetLocalRotation(tetra3d.NewMatrix4())
+	}
+}
+
+func (s *BattleState) syncPlayerActionAnimation() {
+	s.resetPlayerAnimation()
+
+	doubleSlash, ok := s.actionCmd.(*action.DoubleSlash)
+	if !ok || s.playerRig == nil || s.playerNode == nil {
+		return
+	}
+
+	beats := doubleSlash.Beats()
+	if len(beats) == 0 {
+		return
+	}
+
+	tick := doubleSlash.CurrentTick()
+	firstSwing := slashSwingAmount(tick, beats[0].SweetSpot)
+	secondSwing := float32(0)
+	if len(beats) > 1 {
+		secondSwing = slashSwingAmount(tick, beats[1].SweetSpot)
+	}
+
+	reach := slashReachAmount(tick, beats)
+	rootOffset := tetra3d.NewVector3(0.22*reach, 0, 0)
+	s.playerNode.SetLocalPositionVec(s.playerRig.basePos.Add(rootOffset))
+
+	if s.playerRig.torsoPivot != nil {
+		torsoRot := tetra3d.NewMatrix4Rotate(0, 0, 1, -0.16*firstSwing+0.14*secondSwing).
+			Rotated(1, 0, 0, -0.12-0.18*reach)
+		s.playerRig.torsoPivot.SetLocalRotation(torsoRot)
+	}
+
+	if s.playerRig.rightArmPivot != nil {
+		rightArmRot := tetra3d.NewMatrix4Rotate(0, 0, 1, -1.20*firstSwing+1.05*secondSwing).
+			Rotated(1, 0, 0, -0.35-0.28*reach)
+		s.playerRig.rightArmPivot.SetLocalRotation(rightArmRot)
+	}
+
+	if s.playerRig.leftArmPivot != nil {
+		leftArmRot := tetra3d.NewMatrix4Rotate(0, 0, 1, 0.25*firstSwing-0.20*secondSwing).
+			Rotated(1, 0, 0, 0.10*reach)
+		s.playerRig.leftArmPivot.SetLocalRotation(leftArmRot)
+	}
+}
+
+func slashSwingAmount(tick, sweetSpot int) float32 {
+	switch {
+	case tick < sweetSpot-10 || tick > sweetSpot+8:
+		return 0
+	case tick < sweetSpot-4:
+		return lerpFloat32(0, 1, float32(tick-(sweetSpot-10))/6)
+	case tick <= sweetSpot+1:
+		return lerpFloat32(1, -1, float32(tick-(sweetSpot-4))/5)
+	default:
+		return lerpFloat32(-1, 0, float32(tick-(sweetSpot+1))/7)
+	}
+}
+
+func slashReachAmount(tick int, beats []action.SlashBeat) float32 {
+	reach := float32(0)
+	for _, beat := range beats {
+		start := beat.SweetSpot - 8
+		peak := beat.SweetSpot
+		end := beat.SweetSpot + 8
+		switch {
+		case tick < start || tick > end:
+			continue
+		case tick <= peak:
+			reach += lerpFloat32(0, 1, float32(tick-start)/8)
+		default:
+			reach += lerpFloat32(1, 0, float32(tick-peak)/8)
+		}
+	}
+	if reach > 1 {
+		reach = 1
+	}
+	return reach
+}
+
+func lerpFloat32(start, end, t float32) float32 {
+	if t < 0 {
+		t = 0
+	}
+	if t > 1 {
+		t = 1
+	}
+	return start + (end-start)*t
 }

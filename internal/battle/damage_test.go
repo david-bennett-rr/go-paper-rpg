@@ -20,20 +20,20 @@ func TestCalculateDamage(t *testing.T) {
 		want     int
 	}{
 		{
-			name:     "basic jump miss",
+			name:     "basic attack miss",
 			attacker: rpg.Stats{Attack: 1},
 			move:     rpg.Move{BasePower: 1},
 			defender: rpg.Stats{Defense: 0},
 			cmd:      miss,
-			want:     2, // 1*1.0 + 1 - 0 = 2
+			want:     2, // (1+1)*1.0 - 0 = 2
 		},
 		{
-			name:     "excellent jump",
+			name:     "excellent attack",
 			attacker: rpg.Stats{Attack: 1},
 			move:     rpg.Move{BasePower: 1},
 			defender: rpg.Stats{Defense: 0},
 			cmd:      excellent,
-			want:     3, // 1*2.0=2 + 1 - 0 = 3
+			want:     4, // (1+1)*2.0 - 0 = 4
 		},
 		{
 			name:     "high defense reduces to 1",

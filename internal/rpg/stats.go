@@ -64,6 +64,7 @@ type MoveType string
 const (
 	MoveTypeJump    MoveType = "jump"
 	MoveTypeHammer  MoveType = "hammer"
+	MoveTypeSword   MoveType = "sword"
 	MoveTypeSpecial MoveType = "special"
 	MoveTypeItem    MoveType = "item"
 )

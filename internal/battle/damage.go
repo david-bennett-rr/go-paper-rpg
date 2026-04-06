@@ -9,11 +9,12 @@ import (
 // damage = max(attack + basePower - defense, 0), minimum 1 if attack > 0.
 // The action command bonus multiplies the base power before calculation.
 func CalculateDamage(attacker *rpg.Stats, move *rpg.Move, defender *rpg.Stats, cmdResult action.CommandResult) int {
-	effectivePower := int(float64(move.BasePower) * cmdResult.BonusMult)
-	raw := effectivePower + attacker.Attack - defender.Defense
+	// Apply the action command multiplier to the full offensive total (attack + basePower)
+	// so timing bonuses are meaningful even with low base power.
+	rawOffense := float64(move.BasePower+attacker.Attack) * cmdResult.BonusMult
+	raw := int(rawOffense) - defender.Defense
 
 	if raw <= 0 {
-		// Minimum 1 damage if the attacker has any power at all
 		if move.BasePower+attacker.Attack > 0 {
 			return 1
 		}

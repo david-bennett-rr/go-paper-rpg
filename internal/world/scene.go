@@ -14,6 +14,8 @@ const (
 	sunYaw          = -3 * math.Pi / 4
 	sunPitch        = -0.95
 	groundTileDepth = 0.08
+	wallHeightScale = 1.22
+	wallWidthScale  = 1.12
 )
 
 func BuildScene(mapDef *data.MapDef) (*tetra3d.Scene, *overworld.Player, []*overworld.Enemy, error) {
@@ -33,6 +35,15 @@ func BuildScene(mapDef *data.MapDef) (*tetra3d.Scene, *overworld.Player, []*over
 		placeInstance(instance, prop.Position, prop.Yaw, clampScale(prop.Scale))
 		instance.SetName(prop.ID)
 		scene.Root.AddChildren(instance)
+
+		// Blob shadow for props
+		info, ok := PrefabInfoByID(prop.Prefab)
+		if ok {
+			r := float32(info.Radius) * 2.0
+			shadow := NewBlobShadow(prop.ID+"_shadow", r, r, palette)
+			shadow.SetLocalPositionVec(v3(float32(prop.Position[0]), 0.02, float32(prop.Position[2])))
+			scene.Root.AddChildren(shadow)
+		}
 	}
 
 	for _, wallModel := range buildWalls(mapDef.Walls, palette) {
@@ -60,6 +71,17 @@ func BuildScene(mapDef *data.MapDef) (*tetra3d.Scene, *overworld.Player, []*over
 		)
 		instance.SetName(enemyDef.ID)
 		scene.Root.AddChildren(instance)
+
+		// Blob shadow for enemy
+		info, ok := PrefabInfoByID(enemyDef.Prefab)
+		if ok {
+			r := float32(info.Radius) * 2.0
+			shadow := NewBlobShadow(enemyDef.ID+"_shadow", r, r, palette)
+			shadow.SetLocalPositionVec(v3(float32(enemyDef.Position[0]), 0.02, float32(enemyDef.Position[2])))
+			scene.Root.AddChildren(shadow)
+			enemy.Shadow = shadow
+		}
+
 		enemies = append(enemies, enemy)
 	}
 
@@ -77,6 +99,11 @@ func BuildScene(mapDef *data.MapDef) (*tetra3d.Scene, *overworld.Player, []*over
 	playerLight.Range = 5
 	playerLight.SetLocalPosition(0, 1.5, 0)
 	player.Root.AddChildren(playerLight)
+
+	// Player blob shadow
+	playerShadow := NewBlobShadow("player_shadow", 1.2, 1.2, palette)
+	scene.Root.AddChildren(playerShadow)
+	player.Shadow = playerShadow
 
 	scene.Root.AddChildren(player.Root)
 
@@ -214,10 +241,18 @@ func buildWalls(walls []data.WallDef, palette scenePalette) []tetra3d.INode {
 		partModels := make([]*tetra3d.Model, 0, len(component))
 
 		for _, tile := range component {
-			part := newPrimitiveModel("WallTile", cubeMesh, palette.wall, tetra3d.Vector3{}, v3(0.5, float32(tile.height)/2, 0.5))
+			scaledHeight := tile.height * wallHeightScale
+			heightLift := (scaledHeight - tile.height) / 2
+			part := newPrimitiveModel(
+				"WallTile",
+				cubeMesh,
+				palette.wall,
+				tetra3d.Vector3{},
+				v3(0.5*wallWidthScale, float32(scaledHeight)/2, 0.5*wallWidthScale),
+			)
 			part.SetLocalPositionVec(v3(
 				float32(tile.position[0]),
-				float32(tile.position[1]),
+				float32(tile.position[1]+heightLift),
 				float32(tile.position[2]),
 			))
 			part.SetLocalRotation(yawRotation(tile.yaw))

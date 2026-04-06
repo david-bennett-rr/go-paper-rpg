@@ -1,7 +1,7 @@
 package state
 
 import (
-	"math/rand"
+	"math/rand/v2"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/solarlune/tetra3d"
@@ -57,7 +57,7 @@ func (s *OverworldState) Update() error {
 
 		if enemy.CollidesWithPlayer(s.player.X, s.player.Z) {
 			// Roll 1-3 copies of the enemy's battle group
-			count := 1 + rand.Intn(3)
+			count := 1 + rand.IntN(3)
 			group := make([]data.EnemyDef, 0, count)
 			prefabs := make([]string, 0, count)
 			for i := 0; i < count; i++ {

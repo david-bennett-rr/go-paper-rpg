@@ -2,26 +2,26 @@ package rpg
 
 // PartyMember represents a playable character (Mario or a partner).
 type PartyMember struct {
-	Name  string
-	Stats Stats
-	Moves []*Move
+	Name   string
+	Stats  Stats
+	Moves  []*Move
 	IsMain bool // true for Mario
 }
 
 // Party manages the player's active party.
 type Party struct {
-	Mario          *PartyMember
-	Partners       []*PartyMember
-	ActivePartner  int // Index into Partners
-	Coins          int
-	StarPoints     int
-	StarPower      float64
-	MaxStarPower   float64
+	Mario         *PartyMember
+	Partners      []*PartyMember
+	ActivePartner int // Index into Partners
+	Coins         int
+	StarPoints    int
+	StarPower     float64
+	MaxStarPower  float64
 }
 
 func NewParty() *Party {
 	mario := &PartyMember{
-		Name:   "Mario",
+		Name:   "Neu",
 		IsMain: true,
 		Stats: Stats{
 			HP: 10, MaxHP: 10,
@@ -30,8 +30,14 @@ func NewParty() *Party {
 			Level: 1,
 		},
 		Moves: []*Move{
-			{Name: "Jump", BasePower: 1, FPCost: 0, Type: MoveTypeJump, ActionCommand: "timed_press"},
-			{Name: "Hammer", BasePower: 2, FPCost: 0, Type: MoveTypeHammer, ActionCommand: "timed_press"},
+			{
+				Name:          "Slash",
+				BasePower:     1,
+				FPCost:        0,
+				Type:          MoveTypeSword,
+				ActionCommand: "double_slash",
+				Description:   "Two quick sword cuts. Press A on each swing.",
+			},
 		},
 	}
 
